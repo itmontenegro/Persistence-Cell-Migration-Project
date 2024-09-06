@@ -2,20 +2,19 @@ close all;clear all;clc;
 
 %%
 Dr_values = [0,0.1,0.5,1,5,10,100];
-H_values = [0.01,0.25,0.5,0.75,0.99];
-% Dr_values=[0.1];
-H_values=[0.5];
+% H_values = [0.01,0.25,0.5,0.75,0.99];
+H_values = [0.5];
 for Hval = 1:length(H_values)
     for Drval = 1:length(Dr_values)
         %% Generating based on values of H and Dr
         Dr = Dr_values(Drval); H = H_values(Hval); alpha = 0;
         % Loading 5 random datasets of the 50 sims
-        permuted_indices = randperm(25);
+        permuted_indices = randperm(200);
         r = permuted_indices(1:10);
         Dr_str = strrep(num2str(Dr), '.', '_');
         H_str = strrep(num2str(H), '.', '_');
         alpha_str = strrep(num2str(alpha),'.','_');
-        main_pre_alpha = ['Model1_H_cnst/Model1_2D_Batch200/Alpha_',alpha_str,'/H_',H_str];
+        main_pre_alpha = ['Model1_H_cnst/Model1_2D_Batch200_v5/Alpha_',alpha_str,'/H_',H_str];
         name_1 = [main_pre_alpha,'/data__Alpha_',alpha_str,'__Dr_',Dr_str,'__H_',H_str,'/Sim_',num2str(r(1)),'__Dr_',Dr_str,'__H_',H_str,'.csv'];
         name_2 = [main_pre_alpha,'/data__Alpha_',alpha_str,'__Dr_',Dr_str,'__H_',H_str,'/Sim_',num2str(r(2)),'__Dr_',Dr_str,'__H_',H_str,'.csv'];
         name_3 = [main_pre_alpha,'/data__Alpha_',alpha_str,'__Dr_',Dr_str,'__H_',H_str,'/Sim_',num2str(r(3)),'__Dr_',Dr_str,'__H_',H_str,'.csv'];
@@ -56,7 +55,7 @@ for Hval = 1:length(H_values)
         alphaValue = 0.5;  % Adjust as needed (transparency)
         % Plotting Trajectory with color-coded x_array
         figure;
-        axis ([-200,200,-200,200]);
+        axis ([-150,150,-150,150]);
         % Plot using a colormap with transparency
         scatter(x_data_1, y_data_1, 10, 1:1000, 'filled', 'MarkerFaceAlpha', alphaValue);
         hold on;
@@ -91,7 +90,7 @@ for Hval = 1:length(H_values)
         set(gca, 'YTickLabel', []);
         set(gca,'TickLength',[0 0])
         % SAVING PNG FIGURE
-        filename = ['Model1_H_cnst/Model1_2D_Batch200/Alpha_',alpha_str,'/Figures/' ...
+        filename = ['Model1_H_cnst/Model1_2D_Batch200_v5/Alpha_',alpha_str,'/Figures/' ...
             'Trajectories/Alpha_',alpha_str,'__Dr_', Dr_str, '__H_',H_str,'__10Traj.png'];
         exportgraphics(gcf,filename,'Resolution',300);
         close(gcf);
@@ -136,95 +135,52 @@ for Hval = 1:length(H_values)
         set(gca, 'YTickLabel', []);
         set(gca,'TickLength',[0 0])
         % SAVING PNG FIGURE
-        filename = ['Model1_H_cnst/Model1_2D_Batch200/Alpha_',alpha_str,'/Figures/' ...
+        filename = ['Model1_H_cnst/Model1_2D_Batch200_v5/Alpha_',alpha_str,'/Figures/' ...
             'TrajectoriesZoomed/Alpha_',alpha_str,'__Dr_', Dr_str, '__H_',H_str,'__10Traj.png'];
         exportgraphics(gcf,filename,'Resolution',300);
         close(gcf);
-
-        %% FOR ANGLE EVOLUTION
-        % theta_data_1 = data_1.Theta;
-        % norm_theta_1 = mod(theta_data_1, 2*pi);
-        % theta_data_2 = data_2.Theta;
-        % norm_theta_2 = mod(theta_data_2, 2*pi);
-        % theta_data_3 = data_3.Theta;
-        % norm_theta_3 = mod(theta_data_3, 2*pi);
-        % time_vector = linspace(1,1000,height(data_1));
-        % 
-        % figure;
-        % h_traj = plot(time_vector,theta_data_1, 'r-', ...
-        %               time_vector,theta_data_2, 'b-', ...
-        %               time_vector,theta_data_3, 'g-','LineWidth', 2);
-        % % title('Angle Evolution');
-        % % subtitle(['Dr = ', num2str(Dr), ' H = ', num2str(H), ' with Alpha = ', num2str(alpha)])
-        % % xlabel('Time');
-        % % ylabel('Angle Value (in radians)');
-        % axis([0 1000 -10*pi 10*pi]);
-        % set(gcf, 'PaperPosition', [0, 0, 900 / get(gcf, 'ScreenPixelsPerInch'), 900 / get(gcf, 'ScreenPixelsPerInch')]);
-        % % EDITING
-        % axis on;
-        % set(gca,'LineWidth',3)
-        % set(gca, 'XTickLabel', []);
-        % set(gca, 'YTickLabel', []);
-        % set(gca,'TickLength',[0 0])
-        % % SAVING PNG FIGURE
-        % filename = ['Model1_H_cnst/Model1_2D_Batch200/Alpha_',alpha_str,'/Figures/' ...
-        %     'AngleEvo/Alpha_',alpha_str,'__Dr_', Dr_str, '__H_',H_str,'__3AngleEvo.png'];
-        % exportgraphics(gcf,filename,'Resolution',300);
-        % close(gcf);
-        % 
-        % %% FOR dTheta Evolution
-        % time_vector = linspace(1,1000,height(data_1));
-        % dtheta_1 = zeros(1000,1); dtheta_2 = zeros(1000,1); dtheta_3 = zeros(1000,1);
-        % for i = 2:height(data_1)
-        %     dtheta_1(i,1) = theta_data_1(i) - theta_data_1(i-1);
-        %     dtheta_2(i,1) = theta_data_2(i) - theta_data_2(i-1);
-        %     dtheta_3(i,1) = theta_data_3(i) - theta_data_3(i-1);
-        % end
-        % figure;
-        % h_traj = plot(time_vector,dtheta_1, 'r-', ...
-        %               time_vector,dtheta_2, 'b-', ...
-        %               time_vector,dtheta_3, 'g-','LineWidth', 1);
-        % axis([0 1000 -pi pi]);
-        % set(gcf, 'PaperPosition', [0, 0, 900 / get(gcf, 'ScreenPixelsPerInch'), 900 / get(gcf, 'ScreenPixelsPerInch')]);
-        % axis on;
-        % set(gca,'LineWidth',3)
-        % set(gca, 'XTickLabel', []);
-        % set(gca, 'YTickLabel', []);
-        % set(gca,'TickLength',[0 0])
-        % filename_angle = ['Model1_H_cnst/Model1_2D_Batch200/Alpha_',alpha_str,'/Figures/' ...
-        %     'dThetaEvo/Alpha_',alpha_str,'__Dr_', Dr_str, '__H_',H_str,'__3dThetaEvo.png'];
-        % exportgraphics(gcf,filename_angle,'Resolution',300);
-        % close(gcf);
-        % 
-        % 
-        %% Movie
+        % %% Movie
         % close all;
-        % for t = 1:10:length(x_data_1)
+        % for t = 2:10:length(x_data_1)
         %     figure;
-        %     scatter(x_data_1(t), y_data_1(t), 'r','filled');
+        %     axis ([-150,150,-150,150]);
+        %     scatter(x_data_1(t), y_data_1(t),10,'r','filled');
         %     hold on; % Add this line to hold the current plot  
         %     plot(x_data_1(1:t),y_data_1(1:t),'r-','LineWidth', 2);
-        %     scatter(x_data_2(t), y_data_2(t), 'b','filled');    
+        %     scatter(x_data_2(t), y_data_2(t),10, 'b','filled');    
         %     plot(x_data_2(1:t),y_data_2(1:t),'b-','LineWidth', 2);
-        %     scatter(x_data_3(t), y_data_3(t), 'g','filled');
-        %     plot(x_data_3(1:t),y_data_3(1:t),'g-','LineWidth', 2);
-        %     scatter(x_data_4(t), y_data_4(t), 'm','filled');
+        %     scatter(x_data_3(t), y_data_3(t),10,'c','filled');
+        %     plot(x_data_3(1:t),y_data_3(1:t),'c-','LineWidth', 2);
+        %     scatter(x_data_4(t), y_data_4(t),10,'m','filled');
         %     plot(x_data_4(1:t),y_data_4(1:t),'m-','LineWidth', 2);
-        %     scatter(x_data_5(t), y_data_5(t), 'k','filled');
+        %     scatter(x_data_5(t), y_data_5(t),10,'k','filled');
         %     plot(x_data_5(1:t),y_data_5(1:t),'k-','LineWidth', 2);
+        %     scatter(x_data_6(t), y_data_6(t),10,[0.8 0.6 0.49],'filled');
+        %     % HERE THE PROBLEMS BEGIN
+        %     plot(x_data_6(1:t),y_data_6(1:t),'Color',[0.8 0.6 0.49],'LineWidth', 2);     
+        %     scatter(x_data_7(t), y_data_7(t),10,[0.4660 0.6740 0.1880],'filled');
+        %     plot(x_data_7(1:t),y_data_7(1:t),'Color',[0.4660 0.6740 0.1880],'LineWidth', 2);
+        %     scatter(x_data_8(t), y_data_8(t),10,[0.98 0.69 0.18],'filled');
+        %     plot(x_data_8(1:t),y_data_8(1:t),'Color',[0.98 0.69 0.18],'LineWidth', 2);
+        %     scatter(x_data_9(t), y_data_9(t), 10, [0 0.5 0.37],'filled');
+        %     plot(x_data_9(1:t),y_data_9(1:t),'Color',[0 0.5 0.37],'LineWidth', 2);
+        %     scatter(x_data_10(t), y_data_10(t), 10, [0.44 0.44 0.88],'filled');
+        %     plot(x_data_10(1:t),y_data_10(1:t),'Color',[0.44 0.44 0.88],'LineWidth', 2);
         % 
         %     hold off; % Add this line to release the current plot        
         %     % title(['Dr = ', num2str(Dr), ' H = ', num2str(H), ' with Alpha = ', num2str(alpha)])
-        %     axis ([-200,200,-200,200]);
-        %     set(gcf, 'PaperPosition', [0, 0, 900 / get(gcf, 'ScreenPixelsPerInch'), 900 / get(gcf, 'ScreenPixelsPerInch')]);
+        %     axis ([-150,150,-150,150]);
         %     % Show the axes without tick values and labels
         %     axis on;
+        %     box on;
+        %     set(gca,'LineWidth',3)
         %     set(gca, 'XTickLabel', []);
         %     set(gca, 'YTickLabel', []);
+        %     set(gca,'TickLength',[0 0])
         %     % SAVING PNG FIGURE
         %     filename = ['Model1_H_cnst/Model1_2D_Batch200/Alpha_',alpha_str,'/Figures/' ...
         %         'VideoFrames/Dr_',Dr_str,'_H_',H_str,'/Alpha_',alpha_str,'__Dr_', Dr_str, '__H_',H_str,'__Frame_',num2str(t),'.png'];
-        %     saveas(gcf, filename);
+        %     exportgraphics(gcf,filename,'Resolution',300);
         %     close(gcf);
         % end
     end
