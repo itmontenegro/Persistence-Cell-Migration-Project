@@ -55,6 +55,14 @@ for Hval = 1:length(H_values)
                 fmpi_y_array(t) = Fm*sin(theta_array(t));
                 xi_x_array(t) = alpha*dfW2_x(t);
                 xi_y_array(t) = alpha*dfW2_y(t);
+
+                %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                % IDEA FOR "LIVE" PLOTTING (DANIELA MEETING)
+                % UNSURE IF IT WORKS, BECAUSE IT IS INSIDE A LOOP, BUT MAYBE TRY(?)
+                figure;
+                plot(x_array,y_array, 'b-')
+                hold on;
+                %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             end            
             %%% For saving the data
             Dr_str = strrep(num2str(Dr), '.', '_');
@@ -74,6 +82,7 @@ for Hval = 1:length(H_values)
             writetable(data, path_save);
             end_time = toc(start_time_sim);
             fprintf('Completed Sim in: %.2f seconds\n', end_time);
+            
         end        
     end
     end_time = toc(start_time_model);
