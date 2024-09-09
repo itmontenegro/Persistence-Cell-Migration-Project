@@ -9,7 +9,7 @@ start_time = tic;
 %                                                                                         %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%% SET UP
+%% SET UP PARAMETERS
 Dr_values = [0,0.1,0.5,1,5,10,100];
 H_values = [0.5];
 for Hval = 1:length(H_values)
@@ -20,7 +20,7 @@ for Hval = 1:length(H_values)
         % Simulation Parameters
         dt = 0.1; T = 100; Nts = T/dt; 
         Nts2 = linspace(0,T,Nts);     
-        % 50 Sims per model
+        % 200 Sims per model
         for i = 1:200
             start_time_sim = tic;
             % Definition for Fractional Brownian Motion 1 -> White Noise Angle
