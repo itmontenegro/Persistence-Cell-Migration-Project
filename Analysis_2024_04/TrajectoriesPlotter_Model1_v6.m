@@ -57,7 +57,25 @@ for Hval = 1:length(H_values)
 
         loops = 500;
         axisfactor = 1.1;
-        CustomAxis = [min(x_data_1)*axisfactor, max(x_data_1)*axisfactor, min(y_data_1)*axisfactor, max(y_data_1)*axisfactor];
+        min_x = min(x_data_1)
+        max_x = max(x_data_1)
+        min_y = min(y_data_1);
+        max_y = max(y_data_1);
+        
+        dist_x = abs(min_x - max_x);
+        dist_y = abs(min_y - max_y);
+        max_dist = max(dist_x, dist_y);
+        
+        % Define the CustomAxis to be a perfect square
+        CustomAxis = [min(x_data_1) - max_dist/2, max(x_data_1) + max_dist/2, min(y_data_1) - max_dist/2, max(y_data_1) + max_dist/2];
+        
+        % Adjust the axis limits to ensure a perfect square
+        if gt(dist_x, dist_y)
+            CustomAxis = [min(x_data_1), max(x_data_1), min(y_data_1) - (dist_x - dist_y)/2, max(y_data_1) + (dist_x - dist_y)/2];
+        else
+            CustomAxis = [min(x_data_1) - (dist_y - dist_x)/2, max(x_data_1) + (dist_y - dist_x)/2, min(y_data_1), max(y_data_1)];
+        end
+
 
 
         M(loops)= struct('cdata',[],'colormap',[]);
@@ -73,7 +91,7 @@ for Hval = 1:length(H_values)
         axis (CustomAxis); % Set the axis limits
 
         % Plot the trajectory
-        for i = 1:length(x_data_1)
+        for i = 1:100:length(x_data_1)
             cla; % Clear the current axes
             % Plot the line segment from the start to the current point
             plot(x_data_1(1:i), y_data_1(1:i), 'r-', 'LineWidth', 1);
