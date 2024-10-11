@@ -136,11 +136,8 @@ for dr_val = 1:length(Dr_values)
     % Show the ejecution time for each simulation
     end_time = toc(start_time_model);
     fprintf('Completed Model for Dr=%.2f in: %.2f seconds\n', Dr, end_time);
-
 end
 
 % Show the total ejecution time
-end_time_full = toc(start_time_full);
-fprintf('Completed ALL simulations in: %.2f seconds\n', end_time_full);
 end_time_full = toc(start_time_full);
 fprintf('Completed ALL simulations in: %.2f seconds\n', end_time_full);
