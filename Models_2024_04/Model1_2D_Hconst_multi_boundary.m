@@ -21,8 +21,8 @@ Ws = 1; % Cell-substrate adhesion energy
 R = 1;  % Cell radius
 interaction_threshold = 2 * R;  % Set to 2R as per the model
 
-% Define the simulation domain boundaries
-L = 10;  % Length of the simulation square domain [0, L] x [0, L]
+% Simulation domain boundaries
+L = 10;  % Simulation square domain [0, L] x [0, L]
 
 for dr_val = 1:length(Dr_values)
     start_time_model = tic;
