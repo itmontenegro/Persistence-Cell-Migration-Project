@@ -8,8 +8,7 @@ start_time_full = tic;
 %   1) Eq. of Motion: Fm*{cos(theta),sin(theta)} = gamma_s*v_i + dfW2(t)         %
 %   2) Eq. Repolarization SDE: d(theta)/dt = sqrt(2*Dr)*dfW1(t)                  %
 %   3) Eq. of Intercellular Force: 2/R * [Ws - (Ws + Wc)/R * (dij - R)]          %
-%   4) Reflective Boundary Conditions                                            %
-%                                                                                %
+%   4) Reflective Boundary Conditions with Repulsion                             %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% SET UP
@@ -23,6 +22,10 @@ interaction_threshold = 2 * R;  % Set to 2R as per the model
 
 % Simulation domain boundaries
 L = 10;  % Simulation square domain [0, L] x [0, L]
+
+% Repulsion parameters for the boundary
+boundary_repulsion_strength = 10;  % Strength of repulsion force from the boundary
+repulsion_threshold = 0.5 * R;    % Distance from the boundary where repulsion begins
 
 for dr_val = 1:length(Dr_values)
     start_time_model = tic;
@@ -43,10 +46,6 @@ for dr_val = 1:length(Dr_values)
     x_array = zeros(Nts, num_cells); 
     y_array = zeros(Nts, num_cells); 
     theta_array = zeros(Nts, num_cells);
-    
-    % Pre-allocate velocity arrays (optional, useful for boundary reflections)
-    vx_array = zeros(Nts, num_cells);
-    vy_array = zeros(Nts, num_cells);
     
     for cell_idx = 1:num_cells
         % Definition for Fractional Brownian Motion for orientation (theta)
@@ -87,7 +86,7 @@ for dr_val = 1:length(Dr_values)
                                 (y_array(t-1, cell_idx) - y_array(t-1, other_cell))^2);
                     
                     if d_ij <= interaction_threshold
-                        % Eq. of Intercellular Force
+                        % Cell-Cell adhesion force: strong attraction when close
                         F_int = (2/R) * (Ws - ((Ws + Wc)/R) * (d_ij - R));
 
                         % Avoid division by zero
@@ -109,29 +108,37 @@ for dr_val = 1:length(Dr_values)
             new_x = x_array(t-1, cell_idx) + dx_dt * dt;
             new_y = y_array(t-1, cell_idx) + dy_dt * dt;
             
-            %% Reflective Boundary Conditions
-            % Check and enforce boundaries for X
+            %% Reflective Boundary Conditions with Sustained Repulsion
+            % X boundary
             if new_x < 0
-                new_x = -new_x;  % Reflect position
-                dx_dt = -dx_dt;  % Reverse velocity component
+                new_x = 0;  % Ensure position is inside the domain
+                dx_dt = -abs(dx_dt);  % Reverse and ensure movement is away from boundary
             elseif new_x > L
-                new_x = 2*L - new_x;
-                dx_dt = -dx_dt;
+                new_x = L;
+                dx_dt = -abs(dx_dt);
             end
 
-            % Check and enforce boundaries for Y
+            % Y boundary
             if new_y < 0
-                new_y = -new_y;
-                dy_dt = -dy_dt;
+                new_y = 0;
+                dy_dt = -abs(dy_dt);
             elseif new_y > L
-                new_y = 2*L - new_y;
-                dy_dt = -dy_dt;
+                new_y = L;
+                dy_dt = -abs(dy_dt);
             end
             
-            % Optionally, store velocities if needed for analysis
-            vx_array(t, cell_idx) = dx_dt;
-            vy_array(t, cell_idx) = dy_dt;
-            
+            % Apply a sustained repulsive force near the boundary
+            if new_x < repulsion_threshold
+                dx_dt = dx_dt + boundary_repulsion_strength * (repulsion_threshold - new_x);
+            elseif new_x > (L - repulsion_threshold)
+                dx_dt = dx_dt - boundary_repulsion_strength * (new_x - (L - repulsion_threshold));
+            end
+            if new_y < repulsion_threshold
+                dy_dt = dy_dt + boundary_repulsion_strength * (repulsion_threshold - new_y);
+            elseif new_y > (L - repulsion_threshold)
+                dy_dt = dy_dt - boundary_repulsion_strength * (new_y - (L - repulsion_threshold));
+            end
+
             % Update position
             x_array(t, cell_idx) = new_x;
             y_array(t, cell_idx) = new_y;
@@ -165,15 +172,15 @@ for dr_val = 1:length(Dr_values)
     hold off;
     
     % Name the file according to the Dr value
-    file_name = fullfile(output_folder, sprintf('Trajectory_Simulation_Boundary_Dr=%d.png', Dr));
+    file_name = fullfile(output_folder, sprintf('Trajectory_Dr_%.2f.png', Dr));
     
-    % Save the graph as PNG, overwrite if necessary
+    % Save the figure
     saveas(gcf, file_name);
 
-    end_time = toc(start_time_model);
-    fprintf('Completed Model for Dr=%.2f in: %.2f seconds\n', Dr_values(dr_val), end_time);
+    % Timing
+    fprintf('Iteration for Dr = %.2f took %.2f seconds.\n', Dr, toc(start_time_model));
+    
 end
 
-% Mostrar el tiempo total de ejecución para todas las simulaciones
-end_time_full = toc(start_time_full);
-fprintf('Completed ALL simulations in: %.2f seconds\n', end_time_full);
+% Total time for all simulations
+fprintf('Total simulation time: %.2f seconds.\n', toc(start_time_full));
