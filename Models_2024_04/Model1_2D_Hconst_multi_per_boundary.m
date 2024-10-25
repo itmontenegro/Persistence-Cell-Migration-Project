@@ -3,12 +3,15 @@ start_time_full = tic;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %           Euler-Maruyama method on Smeets Model for multiple cells             %
-%                        MULTI-CELL MODEL WITH BOUNDARY                          %
+%                  MULTI-CELL MODEL WITH REFLECTIVE BOUNDARY                     %
 %                                                                                %
-%   1) Eq. of Motion: Fm*{cos(theta),sin(theta)} = gamma_s*v_i + dfW2(t)         %
-%   2) Eq. Repolarization SDE: d(theta)/dt = sqrt(2*Dr)*dfW1(t)                  %
-%   3) Eq. of Intercellular Force: 2/R * [Ws - (Ws + Wc)/R * (dij - R)]          %
-%   4) Reflective Boundary Conditions                                            %
+%   1) Eq. of Motion: Fm*{cos(θ),sin(θ)} = gamma_s*v_i + dfW2(t)                 %
+%   2) Eq. Repolarization SDE: d(θ)/dt = sqrt(2*Dr) * dfW1(t)                    %
+%   3) Eq. Repolarization direction: p_i_f = -Σ[(2*a_ij^2/d_ij^3)*(c_ij-x_ij)]   %
+%   4) Eq. direction vector: p_i_f = (cosθ*_i , sinθ*_i)^T                       %
+%   5) Eq. Repolarization CIL: d(θ)/dt = -fCIL(θi - θ*_i) + ξ * sqrt(2*Dr)       %
+%   6) Eq. of Intercellular Force: 2/R * [Ws - (Ws + Wc)/R * (dij - R)]          %
+%   7) Reflective Boundary Conditions                                            %
 %                                                                                %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -16,7 +19,7 @@ start_time_full = tic;
 Dr_values = [0.1, 0.5, 1, 5, 100];
 num_cells = 5;  % Number of cells
 colors = lines(num_cells);  % Colors for each cell
-Wc = 2; % Cell-cell adhesion energy 
+Wc = 1; % Cell-cell adhesion energy 
 Ws = 1; % Cell-substrate adhesion energy 
 R = 1;  % Cell radius
 interaction_threshold = 2 * R;  % Set to 2R as per the model
@@ -43,8 +46,8 @@ for dr_val = 1:length(Dr_values)
     x_array = zeros(Nts, num_cells); 
     y_array = zeros(Nts, num_cells); 
     theta_array = zeros(Nts, num_cells);
-    
-    for cell_idx = 1:num_cells
+
+    for cell_idx = 1:num_cells    
         % Definition for Fractional Brownian Motion for orientation (theta)
         dfW1 = zeros(Nts,1); 
         fbm_noise1 = fbm(Nts2, 0.5); % fBm with constant H = 0.5
@@ -67,11 +70,49 @@ for dr_val = 1:length(Dr_values)
     %% SIMULATION FOR ALL CELLS
     for t = 2:Nts
         for cell_idx = 1:num_cells
-            % Eq. Repolarization SDE: d(theta)/dt = sqrt(2*Dr)*dfW1(t)
-            dtheta = sqrt(2*Dr) * dfW1(t);
+            p_i_f_x = 0;  % direction vector in x
+            p_i_f_y = 0;  % direction vector in y
+            num_contacts = 0;
+
+            % CIL
+            for other_cell = 1:num_cells
+                if other_cell ~= cell_idx
+                    % Distance between cells
+                    d_ij = sqrt((x_array(t-1, cell_idx) - x_array(t-1, other_cell))^2 + ...
+                                (y_array(t-1, cell_idx) - y_array(t-1, other_cell))^2);
+
+                    if d_ij <= interaction_threshold
+                        % a_ij = (x_i - x_j) + 2R
+                        a_ij = (x_array(t-1, cell_idx) - x_array(t-1, other_cell)) + 2*R;
+
+                        % c_ij = x_i + d_ij / 2
+                        c_ij_x = x_array(t-1, cell_idx) + (x_array(t-1, other_cell) - x_array(t-1, cell_idx)) / 2;
+                        c_ij_y = y_array(t-1, cell_idx) + (y_array(t-1, other_cell) - y_array(t-1, cell_idx)) / 2;
+
+                        % Eq. Repolarization direction: p_i_f = -Σ[(2*a_ij^2/d_ij^3)*(c_ij-x_ij)] 
+                        p_i_f_x = p_i_f_x - (2 * a_ij^2 / d_ij^3) * (c_ij_x - x_array(t-1, cell_idx));
+                        p_i_f_y = p_i_f_y - (2 * a_ij^2 / d_ij^3) * (c_ij_y - y_array(t-1, cell_idx));
+                        num_contacts = num_contacts + 1;
+                    end
+                end
+            end
+
+            % Eq. Repolarization CIL or SDE
+            if num_contacts > 0
+                % direction vector: p_i_f = (cosθ*_i , sinθ*_i)^T  ->  Free angle: θ*_i = tan^-1(p_i_f_y, p_i_f_x)
+                theta_star_i = atan2(p_i_f_y, p_i_f_x);
+
+                %  Eq. Repolarization CIL (with contact)
+                fCIL = 0.1;
+                dtheta = -fCIL * (theta_array(t-1, cell_idx) - theta_star_i) + dfW1(t) * sqrt(2*Dr);
+            else
+                % Eq. Repolarization SDE (without contact)
+                dtheta = sqrt(2*Dr) * dfW1(t);
+            end
+            % Update angle
             theta_array(t, cell_idx) = theta_array(t-1, cell_idx) + dtheta * dt;
 
-            % Eq. of Motion for X and Y without interactions
+            % Eq. of Motion for X and Y
             dx_dt = (Fm * cos(theta_array(t, cell_idx)) - alpha * dfW2_x(t)) / gamma_s;
             dy_dt = (Fm * sin(theta_array(t, cell_idx)) - alpha * dfW2_y(t)) / gamma_s;
             
