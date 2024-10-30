@@ -248,7 +248,11 @@ for Hval = 1:length(H_values)
         figure;
         Dr_value = Dr_values(Drval)
         Dr_str = strrep(num2str(Dr_value), '.', '_');
-        angle = mean_angle_matrix(Drval,:);
+        angle = data_sim.Theta(1)
+        p_x = cos(angle);
+        p_y = sin(angle);
+
+        IAF = cos(angle)*noise_matrix_x + sin(angle) * noise_matrix_y
         
 
         % Saving
