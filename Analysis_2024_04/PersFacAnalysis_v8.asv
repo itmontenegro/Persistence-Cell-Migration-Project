@@ -114,12 +114,12 @@ for Hval = 1:length(H_values)
         % title(['\alpha = 0 and H = ', num2str(H_value)])
         % xlabel('Stepsize')
         % ylabel('Relative Angle')
-        axis([0 max(mean_stepsize_matrix, [], 'all') 0 max(noise_norm_matrix, [], 'all')])
+        axis([0 0.2 0 1])
         axis on;
         box on;
         set(gca,'LineWidth',3)
-        %set(gca, 'XTickLabel', []);
-        %set(gca, 'YTickLabel', []);
+        set(gca, 'XTickLabel', []);
+        set(gca, 'YTickLabel', []);
         set(gca,'TickLength',[0 0])
 
         % Saving
@@ -189,7 +189,7 @@ for Hval = 1:length(H_values)
         % title(['\alpha = 0 and H = ', num2str(H_value)])
         % xlabel('Stepsize')
         % ylabel('Relative Angle')
-        axis([0 max(mean_angle_matrix, [], 'all') 0 1])
+        axis([0 0.2 0 1])
         axis on;
         box on;
         set(gca,'LineWidth',3)
@@ -239,26 +239,8 @@ end
 % set(gca,'TickLength',[0 0])
 % 
 % 
-%% Initial noise vs initial angle
 
-for Hval = 1:length(H_values)
-    H_value = H_values(Hval);
-    H_str = strrep(num2str(H_values(Hval)), '.', '_');
-    for Drval = 1:length(Dr_values)
-        figure;
-        Dr_value = Dr_values(Drval)
-        Dr_str = strrep(num2str(Dr_value), '.', '_');
-        angle = mean_angle_matrix(Drval,:);
-        
 
-        % Saving
-        filename = ['Model1_H_cnst/FIGURES_082024/' ...
-            'Scatter_PF_IC/Alpha_0_25_H_', H_str, '__PF_IC.png'];            
-        % close(gcf);
-        hold on;
-        exportgraphics(gcf,filename,'Resolution',300);
-    end
-end
 
 
 
