@@ -3,7 +3,7 @@ start_time_full = tic;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %           Euler-Maruyama method on Smeets Model for multiple cells             %
-%                  MULTI-CELL MODEL WITH REFLECTIVE BOUNDARY                     %
+%                  MULTI-CELL MODEL WITH PERIODIC BOUNDARY                       %
 %                                                                                %
 %   1) Eq. of Motion: Fm*{cos(θ),sin(θ)} = gamma_s*v_i + dfW2(t)                 %
 %   2) Eq. Repolarization SDE: d(θ)/dt = sqrt(2*Dr) * dfW1(t)                    %
@@ -17,12 +17,12 @@ start_time_full = tic;
 
 %% SET UP
 Dr_values = [0.1, 0.5, 1, 5, 100];
-num_cells = 5;  % Number of cells
+num_cells = 3;  % Number of cells
 colors = lines(num_cells);  % Colors for each cell
 Wc = 1; % Cell-cell adhesion energy 
 Ws = 1; % Cell-substrate adhesion energy 
 R = 1;  % Cell radius
-interaction_threshold = 2 * R;  % Set to 2R as per the model
+interaction_threshold = 2 * R;  % cells touching
 
 % Simulation domain boundaries
 L = 10;  % Simulation square domain [0, L] x [0, L]
@@ -77,17 +77,23 @@ for dr_val = 1:length(Dr_values)
             % CIL
             for other_cell = 1:num_cells
                 if other_cell ~= cell_idx
-                    % Distance between cells
-                    d_ij = sqrt((x_array(t-1, cell_idx) - x_array(t-1, other_cell))^2 + ...
-                                (y_array(t-1, cell_idx) - y_array(t-1, other_cell))^2);
+                    % Distance between cells (considering periodic boundary)
+                    dx = x_array(t-1, cell_idx) - x_array(t-1, other_cell);
+                    dy = y_array(t-1, cell_idx) - y_array(t-1, other_cell);
+
+                    % Apply periodic boundary conditions to distances
+                    dx = dx - L * round(dx / L);
+                    dy = dy - L * round(dy / L);
+
+                    d_ij = sqrt(dx^2 + dy^2);
 
                     if d_ij <= interaction_threshold
-                        % a_ij = (x_i - x_j) + 2R
-                        a_ij = (x_array(t-1, cell_idx) - x_array(t-1, other_cell)) + 2*R;
+                        % a_ij = dx + 2R
+                        a_ij = dx + 2 * R;
 
-                        % c_ij = x_i + d_ij / 2
-                        c_ij_x = x_array(t-1, cell_idx) + (x_array(t-1, other_cell) - x_array(t-1, cell_idx)) / 2;
-                        c_ij_y = y_array(t-1, cell_idx) + (y_array(t-1, other_cell) - y_array(t-1, cell_idx)) / 2;
+                        % c_ij = midpoint (considering periodic boundaries)
+                        c_ij_x = x_array(t-1, cell_idx) + dx / 2;
+                        c_ij_y = y_array(t-1, cell_idx) + dy / 2;
 
                         % Eq. Repolarization direction: p_i_f = -Σ[(2*a_ij^2/d_ij^3)*(c_ij-x_ij)] 
                         p_i_f_x = p_i_f_x - (2 * a_ij^2 / d_ij^3) * (c_ij_x - x_array(t-1, cell_idx));
@@ -109,6 +115,7 @@ for dr_val = 1:length(Dr_values)
                 % Eq. Repolarization SDE (without contact)
                 dtheta = sqrt(2*Dr) * dfW1(t);
             end
+            
             % Update angle
             theta_array(t, cell_idx) = theta_array(t-1, cell_idx) + dtheta * dt;
 
@@ -146,24 +153,9 @@ for dr_val = 1:length(Dr_values)
             new_x = x_array(t-1, cell_idx) + dx_dt * dt;
             new_y = y_array(t-1, cell_idx) + dy_dt * dt;
             
-            %% Reflective Boundary Conditions
-            % Check and enforce boundaries for X
-            if new_x < 0
-                new_x = -new_x;  % Reflect position
-                dx_dt = -dx_dt;  % Reverse velocity component
-            elseif new_x > L
-                new_x = 2*L - new_x;
-                dx_dt = -dx_dt;
-            end
-
-            % Check and enforce boundaries for Y
-            if new_y < 0
-                new_y = -new_y;
-                dy_dt = -dy_dt;
-            elseif new_y > L
-                new_y = 2*L - new_y;
-                dy_dt = -dy_dt;
-            end
+            %% Periodic Boundary Conditions
+            new_x = mod(new_x, L);
+            new_y = mod(new_y, L);
             
             % Update position
             x_array(t, cell_idx) = new_x;
@@ -175,7 +167,7 @@ for dr_val = 1:length(Dr_values)
 
     % Path for 'Output_Trajectories'
     current_folder = fileparts(mfilename('fullpath'));
-    output_folder = fullfile(current_folder, 'Output_Trajectories_Boundary');
+    output_folder = fullfile(current_folder, 'Output_Trajectories_Periodic_Boundary');
 
     % Create folder if it doesn't exist
     if ~exist(output_folder, 'dir')
@@ -185,15 +177,60 @@ for dr_val = 1:length(Dr_values)
     %% Plot final trajectories for all cells with distinct colors
     figure;
     hold on;
+
+    % Crear un arreglo para manejar objetos de líneas (para la leyenda)
+    line_handles = gobjects(num_cells, 1);
+
     for cell_idx = 1:num_cells
-        plot(x_array(:, cell_idx), y_array(:, cell_idx), 'Color', colors(cell_idx,:), 'LineWidth', 2);
+        for t = 2:Nts
+            % Detect crossing boundaries and adjust visualization
+            x_prev = x_array(t-1, cell_idx);
+            y_prev = y_array(t-1, cell_idx);
+            x_curr = x_array(t, cell_idx);
+            y_curr = y_array(t, cell_idx);
+
+            dx = x_curr - x_prev;
+            dy = y_curr - y_prev;
+
+            % Adjust for periodic boundary crossing in X
+            if abs(dx) > L/2
+                if dx > 0
+                    x_curr = x_curr - L;
+                else
+                    x_curr = x_curr + L;
+                end
+            end
+
+            % Adjust for periodic boundary crossing in Y
+            if abs(dy) > L/2
+                if dy > 0
+                    y_curr = y_curr - L;
+                else
+                    y_curr = y_curr + L;
+                end
+            end
+
+            % Plot the adjusted segment
+            if t == 2
+                % Guardar el primer objeto de línea para la leyenda
+                line_handles(cell_idx) = plot([x_prev, x_curr], [y_prev, y_curr], ...
+                                            'Color', colors(cell_idx, :), 'LineWidth', 2);
+            else
+                % Agregar segmentos sin modificar la leyenda
+                plot([x_prev, x_curr], [y_prev, y_curr], 'Color', colors(cell_idx, :), 'LineWidth', 2);
+            end
+        end
     end
+
     % Draw the boundary for visualization
     rectangle('Position', [0, 0, L, L], 'EdgeColor', 'k', 'LineWidth', 2);
+    axis([0 L 0 L]);
     xlabel('X position');
     ylabel('Y position');
     title(['Cell Movement (Final Trajectories) for Dr = ', num2str(Dr)]);
-    legend(arrayfun(@(x) ['Cell ', num2str(x)], 1:num_cells, 'UniformOutput', false));
+
+    % Actualizar la leyenda con los objetos de línea correctos
+    legend(line_handles, arrayfun(@(x) ['Cell ', num2str(x)], 1:num_cells, 'UniformOutput', false), 'Location', 'BestOutside');
     grid on;
     hold off;
     

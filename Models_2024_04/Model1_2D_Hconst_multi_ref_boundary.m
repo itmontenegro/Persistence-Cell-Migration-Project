@@ -22,7 +22,7 @@ colors = lines(num_cells);  % Colors for each cell
 Wc = 1; % Cell-cell adhesion energy 
 Ws = 1; % Cell-substrate adhesion energy 
 R = 1;  % Cell radius
-interaction_threshold = 2 * R;  % Set to 2R as per the model
+interaction_threshold = 2 * R;  % cells touching
 
 % Simulation domain boundaries
 L = 10;  % Simulation square domain [0, L] x [0, L]
@@ -109,6 +109,7 @@ for dr_val = 1:length(Dr_values)
                 % Eq. Repolarization SDE (without contact)
                 dtheta = sqrt(2*Dr) * dfW1(t);
             end
+
             % Update angle
             theta_array(t, cell_idx) = theta_array(t-1, cell_idx) + dtheta * dt;
 
@@ -175,7 +176,7 @@ for dr_val = 1:length(Dr_values)
 
     % Path for 'Output_Trajectories'
     current_folder = fileparts(mfilename('fullpath'));
-    output_folder = fullfile(current_folder, 'Output_Trajectories_Boundary');
+    output_folder = fullfile(current_folder, 'Output_Trajectories_Reflective_Boundary');
 
     % Create folder if it doesn't exist
     if ~exist(output_folder, 'dir')
@@ -193,7 +194,7 @@ for dr_val = 1:length(Dr_values)
     xlabel('X position');
     ylabel('Y position');
     title(['Cell Movement (Final Trajectories) for Dr = ', num2str(Dr)]);
-    legend(arrayfun(@(x) ['Cell ', num2str(x)], 1:num_cells, 'UniformOutput', false));
+    legend(arrayfun(@(x) ['Cell ', num2str(x)], 1:num_cells, 'UniformOutput', false), 'Location', 'BestOutside');
     grid on;
     hold off;
     
