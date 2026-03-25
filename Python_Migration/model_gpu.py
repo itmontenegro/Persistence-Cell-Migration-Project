@@ -7,13 +7,13 @@ import os
 start_time = time.time()
 
 # SET UP
-iterations = 200
+iterations = 20
 Dr_values = [1]
-H1_values = [0.99] # H for Equation of Angle
-H2_values = [0.99] # H for Equation of Motion --> 2D (x and y)
+H1_values = [0.5, 0.75, 0.99] # H for Equation of Angle
+H2_values = [0.5, 0.75, 0.99] # H for Equation of Motion --> 2D (x and y)
 Fm = 1
 gamma_s = 1
-Dr = 0.1
+Dr = 1
 alpha = 0.25
 dt = 0.1
 T = 100
