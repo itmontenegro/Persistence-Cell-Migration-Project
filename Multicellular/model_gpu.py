@@ -109,7 +109,7 @@ for Hval1 in range(len(H1_values)):
                     # Avoid self-interaction by setting diagonal to infinity
                     cp.fill_diagonal(dist, cp.inf)
 
-                    # Interaction masking: only consider interactions if R <= dist <= 2R
+                    # Interaction masking: only consider interactions if R <= dist <= 2R (dist <= 2*R due to physical limitations)
                     mask = (dist <= 2*R)
 
                     # Normal vectors

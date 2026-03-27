@@ -14,7 +14,7 @@ alpha = 0.25
 Dr = 1
 
 # Numero de trayectorias a graficar por cada combinación de H1 y H2
-n_traj = 20
+n_traj = 6
 
 if not os.path.exists(save_path):
     os.makedirs(save_path)
@@ -58,7 +58,7 @@ for h1 in range(len(H1_values)):
         fig, ax = plt.subplots(figsize=(800/300, 800/300), dpi=300)
 
         for i in range(n_traj):
-            ax.scatter(x_selected[i, :], y_selected[i, :], c=time_array, cmap=cmap, s=50, alpha=ataxis, edgecolors='none')
+            ax.scatter(x_selected[i, :], y_selected[i, :], c=time_array, cmap=cmap, s=1, alpha=ataxis, edgecolors='none')
         
         # EDITING General plot
         ax.axis([-75, 75, -75, 75])
@@ -74,5 +74,27 @@ for h1 in range(len(H1_values)):
         plt.savefig(f'{save_path}/Traj_H1_{H1_str}_H2_{H2_str}_Alpha_{Alpha_str}_Dr_{Dr_str}.png', bbox_inches='tight', pad_inches=0)
         plt.close(fig)
         print(f"Saved trajectory plot for H1={H1}, H2={H2} at {save_path}/Traj_H1_{H1_str}_H2_{H2_str}_Alpha_{Alpha_str}_Dr_{Dr_str}.png")
+
+        # Zoomed plot
+        fig, ax = plt.subplots(figsize=(800/300, 800/300), dpi=300)
+
+        color_map = plt.get_cmap('gist_rainbow')
+
+        for i in range(n_traj):
+            color_map_index = color_map(i / n_traj)  # Cycle through the first 20 colors
+            ax.scatter(x_selected[i, :], y_selected[i, :], c=[color_map_index], s=1.2, edgecolors='none', zorder=2)
+            ax.plot(x_selected[i, :], y_selected[i, :], color=color_map_index, linewidth=0.8,zorder=1)  # Add lines between points
+        
+        ax.axis([-1.5, 1.5, -1.5, 1.5])
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.tick_params(length=0) # TickLength = [0 0]
+
+        for spine in ax.spines.values():
+            spine.set_linewidth(3)
+        
+        plt.savefig(f'{save_path_zoom}/ZoomTraj_H1_{H1_str}_H2_{H2_str}_Alpha_{Alpha_str}_Dr_{Dr_str}.png', bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+        print(f"Saved zoomed trajectory plot for H1={H1}, H2={H2} at {save_path_zoom}/ZoomTraj_H1_{H1_str}_H2_{H2_str}_Alpha_{Alpha_str}_Dr_{Dr_str}.png")
 
          
