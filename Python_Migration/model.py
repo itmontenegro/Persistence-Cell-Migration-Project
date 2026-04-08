@@ -12,22 +12,22 @@ Dr_values = [1]
 H1_values = [0.5] # H for Equation of Angle
 H2_values = [0.5] # H for Equation of Motion --> 2D (x and y)
 
+# Model parameters
+Fm = 1
+gamma_s = 1
+Dr = 0.1
+alpha = 0.25
+
+# Simulation parameters
+dt = 0.1
+T = 100
+Nts = int(T/dt)
+Nts2 = np.linspace(0, T, Nts)
+
 for Hval1 in range(len(H1_values)):
     start_time_model = time.time()
     for Hval2 in range(len(H2_values)):
         for Drval in range(len(Dr_values)):
-            
-            # Model parameters
-            Fm = 1
-            gamma_s = 1
-            Dr = 0.1
-            alpha = 0.25
-            
-            # Simulation parameters
-            dt = 0.1
-            T = 100
-            Nts = int(T/dt)
-            Nts2 = np.linspace(0, T, Nts)
             
             # Values of Hurst Index for Correlations
             H1 = H1_values[Hval1]
