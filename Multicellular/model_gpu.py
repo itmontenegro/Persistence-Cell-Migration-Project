@@ -8,24 +8,25 @@ start_time = time.time()
 
 # SET UP
 replicates = 1     # Number of replicates for each parameter set
-N_cells = 200    # Number of cells to simulate per replicate
+N_cells = 50    # Number of cells to simulate per replicate
 
 # Multicellular parameters
 R = 1.0             # Cell radius
 W_s = 1.0           # Energy of adhesion cell-substrate
 W_c = 1.0          # Energy of adhesion cell-cell
-f_cil = 0.5         # Repolarization rate for CIL
+f_cil = 0.1         # Repolarization rate for CIL
 
-distribution = 5
+distribution = 6
 
-Dr_values = [1, 0.1] 
+Dr_values = [0.1] 
 H1_values = [0.5]  # H for Equation of Angle
-H2_values = [0.7, 0.99]  # H for Equation of Motion --> 2D (x and y)
+H2_values = [0.5]  # H for Equation of Motion --> 2D (x and y)
 Fm = 1
 gamma_s = 1
-alpha = 0.25
+gamma_c = 1.0 # Friction coefficient for cell-cell interactinos
+alpha = 0
 dt = 0.1
-T = 500
+T = 100
 Nts = int(T/dt)
 Nts2 = np.linspace(0, T, Nts)
 
@@ -86,6 +87,8 @@ for Hval1 in range(len(H1_values)):
                 x_array[:, 0] = cp.random.uniform(-L_box, L_box, N_cells)
                 y_array[:, 0] = cp.random.uniform(-L_box, L_box, N_cells)
                 theta_array[:, 0] = cp.random.uniform(0, 2*cp.pi, N_cells)
+                velocity_x_array = cp.zeros((N_cells, Nts))
+                velocity_y_array = cp.zeros((N_cells, Nts))
 
                 fmpi_x_array = cp.zeros((N_cells, Nts))
                 fmpi_y_array = cp.zeros((N_cells, Nts))
@@ -97,6 +100,11 @@ for Hval1 in range(len(H1_values)):
                     x_curr = x_array[:, t-1]
                     y_curr = y_array[:, t-1]
                     theta_curr = theta_array[:, t-1]
+
+                    # Calculate velocities for the current time step
+                    if t > 1:
+                        velocity_x_array[:, t-1] = (x_curr - x_array[:, t-2]) / dt
+                        velocity_y_array[:, t-1] = (y_curr - y_array[:, t-2]) / dt
 
                     # Distance matrices and normal vectors
                     # Broadcasting to compute pairwise distances and angles
@@ -112,19 +120,29 @@ for Hval1 in range(len(H1_values)):
                     # Interaction masking: only consider interactions if R <= dist <= 2R (dist <= 2*R due to physical limitations)
                     mask = (dist <= 2*R)
 
+                    # Velocity differences
+                    dVx = velocity_x_array[:, t-1][:, None] - velocity_x_array[:, t-1][None, :]
+                    dVy = velocity_y_array[:, t-1][:, None] - velocity_y_array[:, t-1][None, :]
+
                     # Normal vectors
                     nX = cp.zeros((N_cells, N_cells))
                     nY = cp.zeros((N_cells, N_cells))
                     nX[mask] = dX[mask] / dist[mask]
                     nY[mask] = dY[mask] / dist[mask]
 
+                    # Friction forces
+                    F_friction_x = cp.zeros((N_cells, N_cells))
+                    F_friction_y = cp.zeros((N_cells, N_cells))
+                    F_friction_x[mask] = -gamma_c * dVx[mask]
+                    F_friction_y[mask] = -gamma_c * dVy[mask]
+
                     # Cell-cell forces
                     F_cc = cp.zeros((N_cells, N_cells))
                     F_cc[mask] = (2.0/R) * (W_s - (W_s + W_c) / R * (dist[mask] - R))
 
                     # Sum of forces for the neighboring cells
-                    sum_F_x = cp.sum(F_cc * nX, axis=1)
-                    sum_F_y = cp.sum(F_cc * nY, axis=1)
+                    sum_F_x = cp.sum(F_cc * nX, axis=1) + cp.sum(F_friction_x, axis=1)
+                    sum_F_y = cp.sum(F_cc * nY, axis=1) + cp.sum(F_friction_y, axis=1)
 
                     # CIL (Contact Inhibition of Locomotion)
                     N_contacts = cp.sum(mask, axis=1) # How many cells are in contact with each cell

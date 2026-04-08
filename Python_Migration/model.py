@@ -15,7 +15,6 @@ H2_values = [0.5] # H for Equation of Motion --> 2D (x and y)
 # Model parameters
 Fm = 1
 gamma_s = 1
-Dr = 0.1
 alpha = 0.25
 
 # Simulation parameters
@@ -32,6 +31,7 @@ for Hval1 in range(len(H1_values)):
             # Values of Hurst Index for Correlations
             H1 = H1_values[Hval1]
             H2 = H2_values[Hval2]
+            Dr = Dr_values[Drval]
             
             # {iterations} sims per model
             for i in range(iterations):

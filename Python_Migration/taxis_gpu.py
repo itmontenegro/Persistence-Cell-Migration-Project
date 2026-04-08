@@ -8,15 +8,15 @@ start_time = time.time()
 
 # SET UP
 # Model parameters
-Dr_values = [0.1, 1, 10] # Diffusion coefficients
-H_values = [0.5, 0.75, 0.99] # Hurst exponent values
+Dr_values = [0] # Diffusion coefficients
+H_values = [0.5, 0.99] # Hurst exponent values
 Fm = 1
 gamma_s = 1
 alpha = 0.25
 dt = 0.1
 T = 100
 Nts = int(T/dt) # Number of time steps
-ftax = [0, 0.2, 0.5] # External force magnitudes
+ftax = [0] # External force magnitudes
 
 Nts2 = np.linspace(0, T, Nts) # Time vector for the simulation
 # Position of the ORGANIZER CENTER (particle_x, particle_y)
