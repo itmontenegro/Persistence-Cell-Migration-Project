@@ -6,6 +6,8 @@ import os
 
 start_time = time.time()
 
+boundary = 'hard' # Boundaries: 'periodic', 'hard', 'none'
+
 # SET UP
 replicates = 1     # Number of replicates for each parameter set
 N_cells = 50    # Number of cells to simulate per replicate
@@ -16,14 +18,14 @@ W_s = 1.0           # Energy of adhesion cell-substrate
 W_c = 1.0          # Energy of adhesion cell-cell
 f_cil = 0.1         # Repolarization rate for CIL
 
-distribution = 6
+distribution = 4
 
 Dr_values = [0.1] 
 H1_values = [0.5]  # H for Equation of Angle
 H2_values = [0.5]  # H for Equation of Motion --> 2D (x and y)
 Fm = 1
 gamma_s = 1
-gamma_c = 1.0 # Friction coefficient for cell-cell interactinos
+gamma_c = 0 # Friction coefficient for cell-cell interactinos
 alpha = 0
 dt = 0.1
 T = 100
@@ -188,6 +190,15 @@ for Hval1 in range(len(H1_values)):
                     # Update positions
                     x_array[:, t] = x_curr + (motor_x + sum_F_x / gamma_s) * dt + stoch_term_dx
                     y_array[:, t] = y_curr + (motor_y + sum_F_y / gamma_s) * dt + stoch_term_dy
+                    
+                    # Apply boundary conditions
+                    if boundary == 'periodic':
+                        if L_box > 0:  # Only apply if L_box is defined
+                            x_array[:, t] = (x_array[:, t] + L_box) % (2 * L_box) - L_box
+                            y_array[:, t] = (y_array[:, t] + L_box) % (2 * L_box) - L_box
+                    elif boundary == 'hard':
+                        x_array[:, t] = cp.clip(x_array[:, t], -L_box, L_box)
+                        y_array[:, t] = cp.clip(y_array[:, t], -L_box, L_box)
 
                     # Save values for analysis
                     fmpi_x_array[:, t] = motor_x * dt

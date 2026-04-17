@@ -863,9 +863,24 @@ def main() -> None:
     parser.add_argument("--R", type=float, default=1.0, help="Cell radius for intercellular force calculation.")
     parser.add_argument("--W-s", type=float, default=1.0, dest="w_s", help="Cell-substrate adhesion term W_s.")
     parser.add_argument("--W-c", type=float, default=0.5, dest="w_c", help="Cell-cell adhesion term W_c.")
-    parser.add_argument("--no-motor", action="store_true", help="Hide motor force arrows.")
-    parser.add_argument("--no-noise", action="store_true", help="Hide fBm noise arrows.")
-    parser.add_argument("--no-intercellular", action="store_true", help="Hide intercellular force arrows.")
+    parser.add_argument(
+        "--motor",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Show motor force arrows (default: hidden).",
+    )
+    parser.add_argument(
+        "--noise",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Show fBm noise arrows (default: hidden).",
+    )
+    parser.add_argument(
+        "--intercellular",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Show intercellular force arrows (default: hidden).",
+    )
     parser.add_argument(
         "--intercellular-time",
         type=str,
@@ -894,8 +909,8 @@ def main() -> None:
     parser.add_argument(
         "--show-path",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Show full past trajectory paths.",
+        default=False,
+        help="Show full past trajectory paths (default: hidden).",
     )
     args = parser.parse_args()
 
@@ -925,9 +940,9 @@ def main() -> None:
             f"{args.data_dir} (alpha={args.alpha}, H1={args.h1}, H2={args.h2}, Dr={args.dr}, sim={args.sim})"
         )
 
-    show_motor = not args.no_motor
-    show_noise = not args.no_noise
-    show_intercellular = not args.no_intercellular
+    show_motor = args.motor
+    show_noise = args.noise
+    show_intercellular = args.intercellular
 
     if args.animate and args.frame_by_frame:
         raise ValueError("Use either --animate or --frame-by-frame, not both.")
