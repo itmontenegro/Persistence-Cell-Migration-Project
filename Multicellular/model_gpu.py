@@ -18,7 +18,7 @@ W_s = 1.0           # Energy of adhesion cell-substrate
 W_c = 1.0          # Energy of adhesion cell-cell
 f_cil = 0.1         # Repolarization rate for CIL
 
-distribution = 4
+L_box = 25          # Size of side of the square boundary
 
 Dr_values = [0.1] 
 H1_values = [0.5]  # H for Equation of Angle
@@ -86,7 +86,6 @@ for Hval1 in range(len(H1_values)):
                 theta_array = cp.zeros((N_cells, Nts))
                 
                 # Distribute the cells randomly in a square domain to avoid initial overlaps
-                L_box = R * N_cells / distribution  # Size of the box to distribute cells
                 x_array[:, 0] = cp.random.uniform(-L_box, L_box, N_cells)
                 y_array[:, 0] = cp.random.uniform(-L_box, L_box, N_cells)
                 theta_array[:, 0] = cp.random.uniform(0, 2*cp.pi, N_cells)
