@@ -1,7 +1,13 @@
 import argparse
+import json
 import re
+import subprocess
+import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
 
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
@@ -22,6 +28,9 @@ REQUIRED_KEYS = {
 
 FOLLOW_MIN_WINDOW = 20.0
 FOLLOW_PADDING = 0.25
+PLOT_CELL_RADIUS = 1.0
+PLOT_W_S = 1.0
+PLOT_W_C = 1.0
 
 
 @dataclass
@@ -39,6 +48,7 @@ class SimulationRecord:
     h1: str
     h2: str
     dr: str
+    boundary: str
 
 
 @dataclass
@@ -47,6 +57,7 @@ class ParameterFilters:
     h1: set[str] | None = None
     h2: set[str] | None = None
     dr: set[str] | None = None
+    boundary: set[str] | None = None
     sim: set[int] | None = None
 
 
@@ -67,20 +78,24 @@ def _normalize_sim_filter(values: list[int] | None) -> set[int] | None:
     return {int(v) for v in values}
 
 
-def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str]:
+def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str]:
     sim_id = -1
-    alpha, h1, h2, dr = "?", "?", "?", "?"
+    alpha, h1, h2, dr, boundary = "?", "?", "?", "?", "?"
 
     path_text = str(npz_file)
-    dir_match = re.search(r"Alpha_([0-9_]+)/H1_([0-9_]+)_H2_([0-9_]+)/Dr_([0-9_]+)", path_text.replace("\\", "/"))
+    dir_match = re.search(
+        r"Alpha_([0-9_]+)/H1_([0-9_]+)_H2_([0-9_]+)/Dr_([0-9_]+)/Boundary_([A-Za-z]+)",
+        path_text.replace("\\", "/"),
+    )
     if dir_match:
         alpha = dir_match.group(1).replace("_", ".")
         h1 = dir_match.group(2).replace("_", ".")
         h2 = dir_match.group(3).replace("_", ".")
         dr = dir_match.group(4).replace("_", ".")
+        boundary = dir_match.group(5).lower()
 
     file_match = re.match(
-        r"Sim_([0-9]+)_Dr_([0-9_]+)_H1_([0-9_]+)_H2_([0-9_]+)_Alpha_([0-9_]+)\.npz$",
+        r"Sim_([0-9]+)_Dr_([0-9_]+)_H1_([0-9_]+)_H2_([0-9_]+)_Alpha_([0-9_]+)(?:_Boundary_([A-Za-z]+))?\.npz$",
         npz_file.name,
     )
     if file_match:
@@ -89,8 +104,10 @@ def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str]:
         h1 = file_match.group(3).replace("_", ".")
         h2 = file_match.group(4).replace("_", ".")
         alpha = file_match.group(5).replace("_", ".")
+        if file_match.group(6):
+            boundary = file_match.group(6).lower()
 
-    return sim_id, alpha, h1, h2, dr
+    return sim_id, alpha, h1, h2, dr, boundary
 
 
 def _matches_filters(
@@ -99,6 +116,7 @@ def _matches_filters(
     h1: str,
     h2: str,
     dr: str,
+    boundary: str,
     filters: ParameterFilters | None,
 ) -> bool:
     if filters is None:
@@ -112,6 +130,8 @@ def _matches_filters(
     if filters.h2 is not None and h2 not in filters.h2:
         return False
     if filters.dr is not None and dr not in filters.dr:
+        return False
+    if filters.boundary is not None and boundary not in filters.boundary:
         return False
     return True
 
@@ -136,8 +156,8 @@ def find_multicellular_files(data_dir: Path, filters: ParameterFilters | None = 
     for file in files:
         if not _is_multicellular_file(file):
             continue
-        sim_id, alpha, h1, h2, dr = _parse_from_path(file)
-        if _matches_filters(sim_id, alpha, h1, h2, dr, filters):
+        sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(file)
+        if _matches_filters(sim_id, alpha, h1, h2, dr, boundary, filters):
             selected.append(file)
     return selected
 
@@ -157,7 +177,7 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
         if x.ndim != 2 or y.ndim != 2 or x.shape != y.shape:
             continue
 
-        sim_id, alpha, h1, h2, dr = _parse_from_path(npz_file)
+        sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(npz_file)
         records.append(
             SimulationRecord(
                 file=npz_file,
@@ -173,6 +193,7 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
                 h1=h1,
                 h2=h2,
                 dr=dr,
+                boundary=boundary,
             )
         )
 
@@ -182,7 +203,7 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
 
 
 def _record_label(rec: SimulationRecord) -> str:
-    return f"Sim={rec.sim_id} | alpha={rec.alpha}, H1={rec.h1}, H2={rec.h2}, Dr={rec.dr}"
+    return f"Sim={rec.sim_id} | alpha={rec.alpha}, H1={rec.h1}, H2={rec.h2}, Dr={rec.dr}, boundary={rec.boundary}"
 
 
 def _compute_intercellular_force(
@@ -212,14 +233,16 @@ def _compute_intercellular_force(
 
 
 def _build_summary(records: list[SimulationRecord]) -> str:
-    grouped: dict[tuple[str, str, str, str], int] = {}
+    grouped: dict[tuple[str, str, str, str, str], int] = {}
     for rec in records:
-        key = (rec.alpha, rec.h1, rec.h2, rec.dr)
+        key = (rec.alpha, rec.h1, rec.h2, rec.dr, rec.boundary)
         grouped[key] = grouped.get(key, 0) + 1
 
     lines = []
-    for alpha, h1, h2, dr in sorted(grouped.keys()):
-        lines.append(f"alpha={alpha}, H1={h1}, H2={h2}, Dr={dr}: n={grouped[(alpha, h1, h2, dr)]}")
+    for alpha, h1, h2, dr, boundary in sorted(grouped.keys()):
+        lines.append(
+            f"alpha={alpha}, H1={h1}, H2={h2}, Dr={dr}, boundary={boundary}: n={grouped[(alpha, h1, h2, dr, boundary)]}"
+        )
     return "\n".join(lines)
 
 
@@ -230,6 +253,17 @@ def _build_record_colors(records: list[SimulationRecord]) -> dict[Path, tuple[fl
     cmap = plt.get_cmap("tab20")
     denom = max(1, len(files) - 1)
     return {file: cmap(idx / denom) for idx, file in enumerate(files)}
+
+
+def _resolve_arrow_visibility(
+    motor: bool | None,
+    noise: bool | None,
+    intercellular: bool | None,
+) -> tuple[bool, bool, bool]:
+    # If no arrow flags are provided, default to showing all three.
+    if motor is None and noise is None and intercellular is None:
+        return True, True, True
+    return bool(motor), bool(noise), bool(intercellular)
 
 
 def plot_multicellular(
@@ -330,7 +364,9 @@ def plot_multicellular(
                     alpha=0.9,
                 )
 
-    handles = [Line2D([0], [0], color="tab:blue", lw=2, label="Motor force")]
+    handles = []
+    if show_motor:
+        handles.append(Line2D([0], [0], color="tab:blue", lw=2, label="Motor force"))
     if show_noise:
         handles.append(Line2D([0], [0], color="tab:red", lw=2, label="fBm noise"))
     if show_intercellular:
@@ -488,7 +524,9 @@ def animate_multicellular(
             )
         )
 
-    legend_handles = [Line2D([0], [0], color="tab:blue", lw=2, label="Motor force")]
+    legend_handles = []
+    if show_motor:
+        legend_handles.append(Line2D([0], [0], color="tab:blue", lw=2, label="Motor force"))
     if show_noise:
         legend_handles.append(Line2D([0], [0], color="tab:red", lw=2, label="fBm noise"))
     if show_intercellular:
@@ -722,7 +760,9 @@ def frame_by_frame_multicellular(
             )
         )
 
-    legend_handles = [Line2D([0], [0], color="tab:blue", lw=2, label="Motor force")]
+    legend_handles = []
+    if show_motor:
+        legend_handles.append(Line2D([0], [0], color="tab:blue", lw=2, label="Motor force"))
     if show_noise:
         legend_handles.append(Line2D([0], [0], color="tab:red", lw=2, label="fBm noise"))
     if show_intercellular:
@@ -839,13 +879,684 @@ def frame_by_frame_multicellular(
     plt.close(fig)
 
 
+def _parse_npz_list(npz_values: list[str] | None) -> list[Path]:
+    if not npz_values:
+        return []
+    paths = [Path(v).expanduser() for v in npz_values if v.strip()]
+    return [p for p in paths if p.exists() and p.suffix.lower() == ".npz"]
+
+
+def _parse_filter_tokens(values: str) -> list[str]:
+    if not values.strip():
+        return []
+    return [tok for tok in re.split(r"[\s,]+", values.strip()) if tok]
+
+
+class PlotterGUI:
+    def __init__(self) -> None:
+        self.root = tk.Tk()
+        self.root.title("Multicellular Tools GUI")
+        self.selected_files: list[Path] = []
+        self.presets_path = Path(__file__).with_name("gui_presets.json")
+        self.model_script_path = Path(__file__).with_name("model_gpu.py")
+
+        self.data_dir_var = tk.StringVar(value=str(Path("DATA")))
+        self.output_var = tk.StringVar(value=str(Path("DATA") / "trajectory_plot_multicellular.png"))
+        self.save_gif_var = tk.StringVar(value="")
+        self.title_var = tk.StringVar(value="Multicellular Migration Trajectories")
+        self.max_sim_var = tk.StringVar(value="3")
+        self.interval_var = tk.StringVar(value="30")
+        self.step_var = tk.StringVar(value="5")
+        self.search_var = tk.StringVar(value="")
+        self.filter_alpha_var = tk.StringVar(value="Any")
+        self.filter_h1_var = tk.StringVar(value="Any")
+        self.filter_h2_var = tk.StringVar(value="Any")
+        self.filter_dr_var = tk.StringVar(value="Any")
+        self.filter_boundary_var = tk.StringVar(value="Any")
+        self.filter_sim_var = tk.StringVar(value="Any")
+        self.status_var = tk.StringVar(value="No DATA folder loaded.")
+        self.arrow_scale_var = tk.StringVar(value="1.0")
+        self.arrow_gain_var = tk.StringVar(value="15.0")
+        self.intercellular_time_var = tk.StringVar(value="end")
+        self.show_var = tk.BooleanVar(value=True)
+        self.motor_var = tk.BooleanVar(value=False)
+        self.noise_var = tk.BooleanVar(value=False)
+        self.intercellular_var = tk.BooleanVar(value=False)
+        self.follow_var = tk.BooleanVar(value=True)
+        self.show_path_var = tk.BooleanVar(value=False)
+
+        self.all_metadata: list[dict[str, object]] = []
+        self.visible_metadata: list[dict[str, object]] = []
+
+        self.sim_boundary_var = tk.StringVar(value="hard")
+        self.sim_replicates_var = tk.StringVar(value="1")
+        self.sim_n_cells_var = tk.StringVar(value="50")
+        self.sim_r_var = tk.StringVar(value="1.0")
+        self.sim_ws_var = tk.StringVar(value="1.0")
+        self.sim_wc_var = tk.StringVar(value="1.0")
+        self.sim_f_cil_var = tk.StringVar(value="0.1")
+        self.sim_distribution_var = tk.StringVar(value="4")
+        self.sim_dr_values_var = tk.StringVar(value="0.1")
+        self.sim_h1_values_var = tk.StringVar(value="0.5")
+        self.sim_h2_values_var = tk.StringVar(value="0.5")
+        self.sim_fm_var = tk.StringVar(value="1.0")
+        self.sim_gamma_s_var = tk.StringVar(value="1.0")
+        self.sim_gamma_c_var = tk.StringVar(value="0.0")
+        self.sim_alpha_var = tk.StringVar(value="0.0")
+        self.sim_dt_var = tk.StringVar(value="0.1")
+        self.sim_t_var = tk.StringVar(value="100.0")
+        self.sim_preset_name_var = tk.StringVar(value="default")
+        self.sim_selected_preset_var = tk.StringVar(value="")
+
+        self._build_ui()
+
+    def _add_labeled_entry(self, parent: tk.Widget, row: int, label: str, variable: tk.StringVar, width: int = 18) -> None:
+        tk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+        tk.Entry(parent, textvariable=variable, width=width).grid(row=row, column=1, sticky="ew", padx=4, pady=2)
+
+    def _update_arrow_controls(self) -> None:
+        if self.motor_var.get() or self.noise_var.get() or self.intercellular_var.get():
+            self.arrow_controls_frame.grid()
+        else:
+            self.arrow_controls_frame.grid_remove()
+
+    def _build_ui(self) -> None:
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+
+        notebook = ttk.Notebook(self.root)
+        notebook.grid(row=0, column=0, sticky="nsew")
+
+        self.plot_tab = tk.Frame(notebook)
+        notebook.add(self.plot_tab, text="Plotter")
+
+        self._build_plot_tab()
+
+    def _build_plot_tab(self) -> None:
+        self.plot_tab.columnconfigure(0, weight=1)
+
+        frame_top = tk.LabelFrame(self.plot_tab, text="Data")
+        frame_top.grid(row=0, column=0, sticky="ew", padx=8, pady=6)
+        frame_top.columnconfigure(1, weight=1)
+
+        self._add_labeled_entry(frame_top, 0, "Data dir", self.data_dir_var, width=60)
+        tk.Button(frame_top, text="Browse Dir", command=self._browse_data_dir).grid(row=0, column=2, padx=4, pady=2)
+        tk.Button(frame_top, text="Load NPZ Files", command=self._load_npz_files).grid(row=1, column=2, padx=4, pady=2)
+        tk.Button(frame_top, text="Scan DATA Folder", command=self._scan_data_folder).grid(row=2, column=2, padx=4, pady=2)
+
+        self._add_labeled_entry(frame_top, 1, "Output image", self.output_var, width=60)
+        self._add_labeled_entry(frame_top, 2, "Output GIF", self.save_gif_var, width=60)
+
+        tk.Label(frame_top, textvariable=self.status_var, anchor="w").grid(row=3, column=0, columnspan=3, sticky="ew", padx=4, pady=4)
+
+        frame_filters = tk.LabelFrame(self.plot_tab, text="Search And Parameter Filters")
+        frame_filters.grid(row=1, column=0, sticky="ew", padx=8, pady=6)
+        frame_filters.columnconfigure(1, weight=1)
+        self._add_labeled_entry(frame_filters, 0, "Search", self.search_var, width=40)
+
+        tk.Label(frame_filters, text="alpha").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self.alpha_combo = ttk.Combobox(frame_filters, textvariable=self.filter_alpha_var, state="readonly", width=20)
+        self.alpha_combo.grid(row=1, column=1, sticky="w", padx=4, pady=2)
+
+        tk.Label(frame_filters, text="H1").grid(row=2, column=0, sticky="w", padx=4, pady=2)
+        self.h1_combo = ttk.Combobox(frame_filters, textvariable=self.filter_h1_var, state="readonly", width=20)
+        self.h1_combo.grid(row=2, column=1, sticky="w", padx=4, pady=2)
+
+        tk.Label(frame_filters, text="H2").grid(row=3, column=0, sticky="w", padx=4, pady=2)
+        self.h2_combo = ttk.Combobox(frame_filters, textvariable=self.filter_h2_var, state="readonly", width=20)
+        self.h2_combo.grid(row=3, column=1, sticky="w", padx=4, pady=2)
+
+        tk.Label(frame_filters, text="Dr").grid(row=4, column=0, sticky="w", padx=4, pady=2)
+        self.dr_combo = ttk.Combobox(frame_filters, textvariable=self.filter_dr_var, state="readonly", width=20)
+        self.dr_combo.grid(row=4, column=1, sticky="w", padx=4, pady=2)
+
+        tk.Label(frame_filters, text="boundary").grid(row=5, column=0, sticky="w", padx=4, pady=2)
+        self.boundary_combo = ttk.Combobox(frame_filters, textvariable=self.filter_boundary_var, state="readonly", width=20)
+        self.boundary_combo.grid(row=5, column=1, sticky="w", padx=4, pady=2)
+
+        tk.Label(frame_filters, text="sim id").grid(row=6, column=0, sticky="w", padx=4, pady=2)
+        self.sim_combo = ttk.Combobox(frame_filters, textvariable=self.filter_sim_var, state="readonly", width=20)
+        self.sim_combo.grid(row=6, column=1, sticky="w", padx=4, pady=2)
+
+        tk.Button(frame_filters, text="Apply Filters", command=self._apply_parameter_filters).grid(row=7, column=0, padx=4, pady=4, sticky="w")
+        tk.Button(frame_filters, text="Reset", command=self._reset_filters).grid(row=7, column=1, padx=4, pady=4, sticky="w")
+
+        frame_params = tk.LabelFrame(self.plot_tab, text="Plot Parameters")
+        frame_params.grid(row=2, column=0, sticky="ew", padx=8, pady=6)
+        frame_params.columnconfigure(1, weight=1)
+        self._add_labeled_entry(frame_params, 0, "Title", self.title_var, width=40)
+        self._add_labeled_entry(frame_params, 1, "max simulations", self.max_sim_var)
+        self._add_labeled_entry(frame_params, 2, "interval", self.interval_var)
+        self._add_labeled_entry(frame_params, 3, "step", self.step_var)
+
+        frame_toggles = tk.LabelFrame(self.plot_tab, text="Flags")
+        frame_toggles.grid(row=3, column=0, sticky="ew", padx=8, pady=6)
+        tk.Checkbutton(frame_toggles, text="Show window", variable=self.show_var).grid(row=0, column=0, sticky="w", padx=6)
+        tk.Checkbutton(frame_toggles, text="Motor", variable=self.motor_var, command=self._update_arrow_controls).grid(row=0, column=1, sticky="w", padx=6)
+        tk.Checkbutton(frame_toggles, text="Noise", variable=self.noise_var, command=self._update_arrow_controls).grid(row=0, column=2, sticky="w", padx=6)
+        tk.Checkbutton(frame_toggles, text="Intercellular", variable=self.intercellular_var, command=self._update_arrow_controls).grid(row=0, column=3, sticky="w", padx=6)
+        tk.Checkbutton(frame_toggles, text="Follow cells", variable=self.follow_var).grid(row=0, column=4, sticky="w", padx=6)
+        tk.Checkbutton(frame_toggles, text="Show path", variable=self.show_path_var).grid(row=0, column=5, sticky="w", padx=6)
+
+        self.arrow_controls_frame = tk.LabelFrame(self.plot_tab, text="Arrow Settings")
+        self.arrow_controls_frame.grid(row=4, column=0, sticky="ew", padx=8, pady=6)
+        self.arrow_controls_frame.columnconfigure(1, weight=1)
+        self._add_labeled_entry(self.arrow_controls_frame, 0, "arrow scale", self.arrow_scale_var)
+        self._add_labeled_entry(self.arrow_controls_frame, 1, "arrow gain", self.arrow_gain_var)
+        tk.Label(self.arrow_controls_frame, text="intercellular time").grid(row=2, column=0, sticky="w", padx=4, pady=2)
+        tk.OptionMenu(self.arrow_controls_frame, self.intercellular_time_var, "start", "mid", "end").grid(row=2, column=1, sticky="w", padx=4, pady=2)
+        self._update_arrow_controls()
+
+        frame_files = tk.LabelFrame(self.plot_tab, text="Selected Simulations (.npz)")
+        frame_files.grid(row=5, column=0, sticky="nsew", padx=8, pady=6)
+        self.plot_tab.rowconfigure(5, weight=1)
+
+        self.file_list = tk.Listbox(frame_files, selectmode=tk.EXTENDED, width=120, height=12)
+        self.file_list.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        scrollbar = tk.Scrollbar(frame_files, orient="vertical", command=self.file_list.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.file_list.configure(yscrollcommand=scrollbar.set)
+        frame_files.columnconfigure(0, weight=1)
+        frame_files.rowconfigure(0, weight=1)
+
+        frame_actions = tk.Frame(self.plot_tab)
+        frame_actions.grid(row=6, column=0, sticky="ew", padx=8, pady=8)
+        tk.Button(frame_actions, text="Static Plot", command=self._run_static).grid(row=0, column=0, padx=4)
+        tk.Button(frame_actions, text="Animate", command=self._run_animate).grid(row=0, column=1, padx=4)
+        tk.Button(frame_actions, text="Frame-by-Frame", command=self._run_frame_by_frame).grid(row=0, column=2, padx=4)
+
+    def _build_sim_tab(self) -> None:
+        self.sim_tab.columnconfigure(0, weight=1)
+        self.sim_tab.rowconfigure(2, weight=1)
+
+        frame_preset = tk.LabelFrame(self.sim_tab, text="Presets")
+        frame_preset.grid(row=0, column=0, sticky="ew", padx=8, pady=6)
+        frame_preset.columnconfigure(4, weight=1)
+
+        tk.Label(frame_preset, text="Preset name").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        tk.Entry(frame_preset, textvariable=self.sim_preset_name_var, width=22).grid(row=0, column=1, sticky="w", padx=4, pady=2)
+        tk.Button(frame_preset, text="Save Preset", command=self._save_sim_preset).grid(row=0, column=2, padx=4, pady=2)
+
+        tk.Label(frame_preset, text="Load preset").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self.preset_combo = ttk.Combobox(frame_preset, textvariable=self.sim_selected_preset_var, state="readonly", width=24)
+        self.preset_combo.grid(row=1, column=1, sticky="w", padx=4, pady=2)
+        tk.Button(frame_preset, text="Load", command=self._load_sim_preset).grid(row=1, column=2, padx=4, pady=2)
+        tk.Button(frame_preset, text="Refresh", command=self._refresh_preset_list).grid(row=1, column=3, padx=4, pady=2)
+
+        frame_params = tk.LabelFrame(self.sim_tab, text="Simulation Parameters (model_gpu.py)")
+        frame_params.grid(row=1, column=0, sticky="ew", padx=8, pady=6)
+        frame_params.columnconfigure(1, weight=1)
+        frame_params.columnconfigure(3, weight=1)
+
+        self._add_labeled_entry(frame_params, 0, "boundary", self.sim_boundary_var)
+        self._add_labeled_entry(frame_params, 1, "replicates", self.sim_replicates_var)
+        self._add_labeled_entry(frame_params, 2, "n_cells", self.sim_n_cells_var)
+        self._add_labeled_entry(frame_params, 3, "R", self.sim_r_var)
+        self._add_labeled_entry(frame_params, 4, "W_s", self.sim_ws_var)
+        self._add_labeled_entry(frame_params, 5, "W_c", self.sim_wc_var)
+        self._add_labeled_entry(frame_params, 6, "f_cil", self.sim_f_cil_var)
+        self._add_labeled_entry(frame_params, 7, "distribution", self.sim_distribution_var)
+        self._add_labeled_entry(frame_params, 8, "Dr values", self.sim_dr_values_var)
+        self._add_labeled_entry(frame_params, 9, "H1 values", self.sim_h1_values_var)
+        self._add_labeled_entry(frame_params, 10, "H2 values", self.sim_h2_values_var)
+        self._add_labeled_entry(frame_params, 11, "Fm", self.sim_fm_var)
+        self._add_labeled_entry(frame_params, 12, "gamma_s", self.sim_gamma_s_var)
+        self._add_labeled_entry(frame_params, 13, "gamma_c", self.sim_gamma_c_var)
+        self._add_labeled_entry(frame_params, 14, "alpha", self.sim_alpha_var)
+        self._add_labeled_entry(frame_params, 15, "dt", self.sim_dt_var)
+        self._add_labeled_entry(frame_params, 16, "T", self.sim_t_var)
+
+        tk.Button(frame_params, text="Run Simulation", command=self._run_simulation).grid(row=17, column=0, padx=4, pady=6, sticky="w")
+
+        frame_log = tk.LabelFrame(self.sim_tab, text="Simulation Log")
+        frame_log.grid(row=2, column=0, sticky="nsew", padx=8, pady=6)
+        frame_log.columnconfigure(0, weight=1)
+        frame_log.rowconfigure(0, weight=1)
+
+        self.sim_log_text = tk.Text(frame_log, height=14, wrap="word")
+        self.sim_log_text.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        sim_scroll = tk.Scrollbar(frame_log, orient="vertical", command=self.sim_log_text.yview)
+        sim_scroll.grid(row=0, column=1, sticky="ns")
+        self.sim_log_text.configure(yscrollcommand=sim_scroll.set)
+
+        self._refresh_preset_list()
+
+    def _simulation_payload(self) -> dict[str, str]:
+        return {
+            "boundary": self.sim_boundary_var.get().strip(),
+            "replicates": self.sim_replicates_var.get().strip(),
+            "n_cells": self.sim_n_cells_var.get().strip(),
+            "R": self.sim_r_var.get().strip(),
+            "W_s": self.sim_ws_var.get().strip(),
+            "W_c": self.sim_wc_var.get().strip(),
+            "f_cil": self.sim_f_cil_var.get().strip(),
+            "distribution": self.sim_distribution_var.get().strip(),
+            "dr_values": self.sim_dr_values_var.get().strip(),
+            "h1_values": self.sim_h1_values_var.get().strip(),
+            "h2_values": self.sim_h2_values_var.get().strip(),
+            "Fm": self.sim_fm_var.get().strip(),
+            "gamma_s": self.sim_gamma_s_var.get().strip(),
+            "gamma_c": self.sim_gamma_c_var.get().strip(),
+            "alpha": self.sim_alpha_var.get().strip(),
+            "dt": self.sim_dt_var.get().strip(),
+            "T": self.sim_t_var.get().strip(),
+        }
+
+    def _apply_sim_payload(self, payload: dict[str, str]) -> None:
+        self.sim_boundary_var.set(payload.get("boundary", self.sim_boundary_var.get()))
+        self.sim_replicates_var.set(payload.get("replicates", self.sim_replicates_var.get()))
+        self.sim_n_cells_var.set(payload.get("n_cells", self.sim_n_cells_var.get()))
+        self.sim_r_var.set(payload.get("R", self.sim_r_var.get()))
+        self.sim_ws_var.set(payload.get("W_s", self.sim_ws_var.get()))
+        self.sim_wc_var.set(payload.get("W_c", self.sim_wc_var.get()))
+        self.sim_f_cil_var.set(payload.get("f_cil", self.sim_f_cil_var.get()))
+        self.sim_distribution_var.set(payload.get("distribution", self.sim_distribution_var.get()))
+        self.sim_dr_values_var.set(payload.get("dr_values", self.sim_dr_values_var.get()))
+        self.sim_h1_values_var.set(payload.get("h1_values", self.sim_h1_values_var.get()))
+        self.sim_h2_values_var.set(payload.get("h2_values", self.sim_h2_values_var.get()))
+        self.sim_fm_var.set(payload.get("Fm", self.sim_fm_var.get()))
+        self.sim_gamma_s_var.set(payload.get("gamma_s", self.sim_gamma_s_var.get()))
+        self.sim_gamma_c_var.set(payload.get("gamma_c", self.sim_gamma_c_var.get()))
+        self.sim_alpha_var.set(payload.get("alpha", self.sim_alpha_var.get()))
+        self.sim_dt_var.set(payload.get("dt", self.sim_dt_var.get()))
+        self.sim_t_var.set(payload.get("T", self.sim_t_var.get()))
+        self._update_arrow_controls()
+
+    def _read_presets(self) -> dict[str, dict[str, str]]:
+        if not self.presets_path.exists():
+            return {}
+        try:
+            content = json.loads(self.presets_path.read_text(encoding="utf-8"))
+            if not isinstance(content, dict):
+                return {}
+            return {str(k): v for k, v in content.items() if isinstance(v, dict)}
+        except Exception:
+            return {}
+
+    def _write_presets(self, presets: dict[str, dict[str, str]]) -> None:
+        self.presets_path.write_text(json.dumps(presets, indent=2), encoding="utf-8")
+
+    def _refresh_preset_list(self) -> None:
+        presets = self._read_presets()
+        names = sorted(presets.keys())
+        self.preset_combo["values"] = names
+        if names and self.sim_selected_preset_var.get() not in names:
+            self.sim_selected_preset_var.set(names[0])
+
+    def _save_sim_preset(self) -> None:
+        name = self.sim_preset_name_var.get().strip()
+        if not name:
+            messagebox.showerror("Preset", "Please enter a preset name.")
+            return
+        presets = self._read_presets()
+        presets[name] = self._simulation_payload()
+        self._write_presets(presets)
+        self._refresh_preset_list()
+        self.sim_selected_preset_var.set(name)
+        messagebox.showinfo("Preset", f"Saved preset '{name}'.")
+
+    def _load_sim_preset(self) -> None:
+        name = self.sim_selected_preset_var.get().strip()
+        if not name:
+            messagebox.showerror("Preset", "Please select a preset.")
+            return
+        presets = self._read_presets()
+        payload = presets.get(name)
+        if payload is None:
+            messagebox.showerror("Preset", f"Preset '{name}' not found.")
+            return
+        self._apply_sim_payload(payload)
+        messagebox.showinfo("Preset", f"Loaded preset '{name}'.")
+
+    def _append_sim_log(self, text: str) -> None:
+        self.sim_log_text.insert(tk.END, text)
+        self.sim_log_text.see(tk.END)
+
+    def _build_model_command(self) -> list[str]:
+        payload = self._simulation_payload()
+        boundary = payload["boundary"].lower()
+        if boundary not in {"hard", "periodic", "none"}:
+            raise ValueError("boundary must be one of: hard, periodic, none")
+
+        return [
+            sys.executable,
+            str(self.model_script_path),
+            "--boundary",
+            boundary,
+            "--replicates",
+            payload["replicates"],
+            "--n-cells",
+            payload["n_cells"],
+            "--R",
+            payload["R"],
+            "--W-s",
+            payload["W_s"],
+            "--W-c",
+            payload["W_c"],
+            "--f-cil",
+            payload["f_cil"],
+            "--distribution",
+            payload["distribution"],
+            "--dr-values",
+            payload["dr_values"],
+            "--h1-values",
+            payload["h1_values"],
+            "--h2-values",
+            payload["h2_values"],
+            "--Fm",
+            payload["Fm"],
+            "--gamma-s",
+            payload["gamma_s"],
+            "--gamma-c",
+            payload["gamma_c"],
+            "--alpha",
+            payload["alpha"],
+            "--dt",
+            payload["dt"],
+            "--T",
+            payload["T"],
+        ]
+
+    def _run_simulation(self) -> None:
+        if not self.model_script_path.exists():
+            messagebox.showerror("Simulation", f"model_gpu.py not found at: {self.model_script_path}")
+            return
+
+        try:
+            cmd = self._build_model_command()
+        except Exception as exc:
+            messagebox.showerror("Simulation", str(exc))
+            return
+
+        self._append_sim_log("\n=== Starting simulation ===\n")
+        self._append_sim_log("Command: " + " ".join(cmd) + "\n")
+
+        def _worker() -> None:
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(self.model_script_path.parent),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    self.root.after(0, self._append_sim_log, line)
+                code = proc.wait()
+                self.root.after(0, self._append_sim_log, f"=== Simulation finished (exit code {code}) ===\n")
+            except Exception as exc:
+                self.root.after(0, self._append_sim_log, f"Simulation failed: {exc}\n")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _browse_data_dir(self) -> None:
+        selected = filedialog.askdirectory(initialdir=self.data_dir_var.get() or ".")
+        if selected:
+            self.data_dir_var.set(selected)
+
+    def _load_npz_files(self) -> None:
+        files = filedialog.askopenfilenames(
+            initialdir=self.data_dir_var.get() or ".",
+            title="Select NPZ simulations",
+            filetypes=[("NPZ files", "*.npz")],
+        )
+        if files:
+            self.selected_files = [Path(p) for p in files]
+            self.all_metadata = []
+            for p in self.selected_files:
+                sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(p)
+                self.all_metadata.append(
+                    {
+                        "file": p,
+                        "sim_id": sim_id,
+                        "alpha": alpha,
+                        "h1": h1,
+                        "h2": h2,
+                        "dr": dr,
+                        "boundary": boundary,
+                    }
+                )
+            self._populate_filter_options()
+            self._apply_parameter_filters()
+
+    def _scan_data_folder(self) -> None:
+        data_dir = Path(self.data_dir_var.get()).expanduser()
+        if not data_dir.exists():
+            messagebox.showerror("Invalid data dir", f"Directory does not exist: {data_dir}")
+            return
+
+        npz_files = find_multicellular_files(data_dir)
+        self.all_metadata = []
+        for p in npz_files:
+            sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(p)
+            self.all_metadata.append(
+                {
+                    "file": p,
+                    "sim_id": sim_id,
+                    "alpha": alpha,
+                    "h1": h1,
+                    "h2": h2,
+                    "dr": dr,
+                    "boundary": boundary,
+                }
+            )
+
+        self._populate_filter_options()
+        self._apply_parameter_filters()
+        self.status_var.set(f"Indexed {len(self.all_metadata)} simulations from {data_dir}")
+
+    def _set_filter_values(
+        self,
+        alphas: list[str],
+        h1s: list[str],
+        h2s: list[str],
+        drs: list[str],
+        boundaries: list[str],
+        sims: list[str],
+    ) -> None:
+        self.alpha_combo["values"] = ["Any"] + alphas
+        self.h1_combo["values"] = ["Any"] + h1s
+        self.h2_combo["values"] = ["Any"] + h2s
+        self.dr_combo["values"] = ["Any"] + drs
+        self.boundary_combo["values"] = ["Any"] + boundaries
+        self.sim_combo["values"] = ["Any"] + sims
+
+        if self.filter_alpha_var.get() not in self.alpha_combo["values"]:
+            self.filter_alpha_var.set("Any")
+        if self.filter_h1_var.get() not in self.h1_combo["values"]:
+            self.filter_h1_var.set("Any")
+        if self.filter_h2_var.get() not in self.h2_combo["values"]:
+            self.filter_h2_var.set("Any")
+        if self.filter_dr_var.get() not in self.dr_combo["values"]:
+            self.filter_dr_var.set("Any")
+        if self.filter_boundary_var.get() not in self.boundary_combo["values"]:
+            self.filter_boundary_var.set("Any")
+        if self.filter_sim_var.get() not in self.sim_combo["values"]:
+            self.filter_sim_var.set("Any")
+
+    def _populate_filter_options(self) -> None:
+        alphas = sorted({str(m["alpha"]) for m in self.all_metadata})
+        h1s = sorted({str(m["h1"]) for m in self.all_metadata})
+        h2s = sorted({str(m["h2"]) for m in self.all_metadata})
+        drs = sorted({str(m["dr"]) for m in self.all_metadata})
+        boundaries = sorted({str(m["boundary"]) for m in self.all_metadata})
+        sims = sorted({str(m["sim_id"]) for m in self.all_metadata}, key=lambda v: int(v) if v.lstrip("-").isdigit() else 999999)
+        self._set_filter_values(alphas, h1s, h2s, drs, boundaries, sims)
+
+    def _metadata_label(self, m: dict[str, object]) -> str:
+        return (
+            f"Sim={m['sim_id']} | alpha={m['alpha']}, H1={m['h1']}, H2={m['h2']}, Dr={m['dr']}, boundary={m['boundary']} | {m['file']}"
+        )
+
+    def _refresh_listbox(self) -> None:
+        self.file_list.delete(0, tk.END)
+        for m in self.visible_metadata:
+            self.file_list.insert(tk.END, self._metadata_label(m))
+
+    def _match_exact_or_any(self, selected: str, value: object) -> bool:
+        return selected == "Any" or str(value) == selected
+
+    def _apply_parameter_filters(self) -> None:
+        search = self.search_var.get().strip().lower()
+        filtered = []
+        for m in self.all_metadata:
+            if not self._match_exact_or_any(self.filter_alpha_var.get(), m["alpha"]):
+                continue
+            if not self._match_exact_or_any(self.filter_h1_var.get(), m["h1"]):
+                continue
+            if not self._match_exact_or_any(self.filter_h2_var.get(), m["h2"]):
+                continue
+            if not self._match_exact_or_any(self.filter_dr_var.get(), m["dr"]):
+                continue
+            if not self._match_exact_or_any(self.filter_boundary_var.get(), m["boundary"]):
+                continue
+            if not self._match_exact_or_any(self.filter_sim_var.get(), m["sim_id"]):
+                continue
+
+            label = self._metadata_label(m).lower()
+            if search and search not in label:
+                continue
+            filtered.append(m)
+
+        self.visible_metadata = filtered
+        self.selected_files = [Path(m["file"]) for m in self.visible_metadata]
+        self._refresh_listbox()
+        self.status_var.set(f"Showing {len(self.visible_metadata)} / {len(self.all_metadata)} simulations")
+
+    def _reset_filters(self) -> None:
+        self.search_var.set("")
+        self.filter_alpha_var.set("Any")
+        self.filter_h1_var.set("Any")
+        self.filter_h2_var.set("Any")
+        self.filter_dr_var.set("Any")
+        self.filter_boundary_var.set("Any")
+        self.filter_sim_var.set("Any")
+        self._apply_parameter_filters()
+
+    def _chosen_files(self) -> list[Path]:
+        selected_indices = self.file_list.curselection()
+        if not selected_indices:
+            return [Path(m["file"]) for m in self.visible_metadata]
+        return [Path(self.visible_metadata[i]["file"]) for i in selected_indices]
+
+    def _common_kwargs(self) -> dict[str, object]:
+        return {
+            "title": self.title_var.get(),
+            "show_plot": bool(self.show_var.get()),
+            "max_simulations": int(self.max_sim_var.get()),
+            "show_motor": bool(self.motor_var.get()),
+            "show_noise": bool(self.noise_var.get()),
+            "show_intercellular": bool(self.intercellular_var.get()),
+            "step": int(self.step_var.get()),
+            "arrow_scale": float(self.arrow_scale_var.get()),
+            "arrow_gain": float(self.arrow_gain_var.get()),
+            "follow_cells": bool(self.follow_var.get()),
+            "show_path": bool(self.show_path_var.get()),
+        }
+
+    def _run_static(self) -> None:
+        try:
+            files = self._chosen_files()
+            if not files:
+                raise ValueError("No simulation files selected.")
+
+            plot_multicellular(
+                files,
+                output_path=Path(self.output_var.get()).expanduser(),
+                title=self.title_var.get(),
+                show_plot=bool(self.show_var.get()),
+                max_simulations=int(self.max_sim_var.get()),
+                show_motor=bool(self.motor_var.get()),
+                show_noise=bool(self.noise_var.get()),
+                show_intercellular=bool(self.intercellular_var.get()),
+                cell_radius=PLOT_CELL_RADIUS,
+                adhesion_substrate=PLOT_W_S,
+                adhesion_cell=PLOT_W_C,
+                intercellular_time=self.intercellular_time_var.get(),
+                arrow_scale=float(self.arrow_scale_var.get()),
+                arrow_gain=float(self.arrow_gain_var.get()),
+                show_path=bool(self.show_path_var.get()),
+            )
+            messagebox.showinfo("Success", "Static plot generated.")
+        except Exception as exc:
+            messagebox.showerror("Plot failed", str(exc))
+
+    def _run_animate(self) -> None:
+        try:
+            files = self._chosen_files()
+            if not files:
+                raise ValueError("No simulation files selected.")
+
+            save_gif = self.save_gif_var.get().strip()
+            animate_multicellular(
+                files,
+                title=self.title_var.get(),
+                show_plot=bool(self.show_var.get()),
+                save_gif=Path(save_gif).expanduser() if save_gif else None,
+                max_simulations=int(self.max_sim_var.get()),
+                cell_radius=PLOT_CELL_RADIUS,
+                adhesion_substrate=PLOT_W_S,
+                adhesion_cell=PLOT_W_C,
+                show_motor=bool(self.motor_var.get()),
+                show_noise=bool(self.noise_var.get()),
+                show_intercellular=bool(self.intercellular_var.get()),
+                interval=int(self.interval_var.get()),
+                step=int(self.step_var.get()),
+                arrow_scale=float(self.arrow_scale_var.get()),
+                arrow_gain=float(self.arrow_gain_var.get()),
+                follow_cells=bool(self.follow_var.get()),
+                show_path=bool(self.show_path_var.get()),
+            )
+            messagebox.showinfo("Success", "Animation complete.")
+        except Exception as exc:
+            messagebox.showerror("Animation failed", str(exc))
+
+    def _run_frame_by_frame(self) -> None:
+        try:
+            files = self._chosen_files()
+            if not files:
+                raise ValueError("No simulation files selected.")
+
+            frame_by_frame_multicellular(
+                files,
+                title=self.title_var.get(),
+                max_simulations=int(self.max_sim_var.get()),
+                cell_radius=PLOT_CELL_RADIUS,
+                adhesion_substrate=PLOT_W_S,
+                adhesion_cell=PLOT_W_C,
+                show_motor=bool(self.motor_var.get()),
+                show_noise=bool(self.noise_var.get()),
+                show_intercellular=bool(self.intercellular_var.get()),
+                step=int(self.step_var.get()),
+                arrow_scale=float(self.arrow_scale_var.get()),
+                arrow_gain=float(self.arrow_gain_var.get()),
+                follow_cells=bool(self.follow_var.get()),
+                show_path=bool(self.show_path_var.get()),
+            )
+        except Exception as exc:
+            messagebox.showerror("Frame mode failed", str(exc))
+
+    def run(self) -> None:
+        self.root.minsize(980, 760)
+        self.root.mainloop()
+
+
 def main() -> None:
+    if len(sys.argv) == 1:
+        PlotterGUI().run()
+        return
+
     parser = argparse.ArgumentParser(description="Plot multicellular model_gpu.py trajectory outputs.")
     parser.add_argument("--data-dir", type=Path, default=Path("DATA"), help="Root folder containing multicellular NPZ files.")
+    parser.add_argument("--files", nargs="+", default=None, help="Optional explicit NPZ file paths to load.")
     parser.add_argument("--max-simulations", type=int, default=3, help="Maximum number of simulations to plot.")
     parser.add_argument("--output", type=Path, default=Path("DATA") / "trajectory_plot_multicellular.png", help="Saved static figure path.")
     parser.add_argument("--title", type=str, default="Multicellular Migration Trajectories", help="Plot title.")
     parser.add_argument("--show", action="store_true", help="Display the plot window.")
+    parser.add_argument("--gui", action="store_true", help="Launch GUI app for simulation browsing and plotting.")
     parser.add_argument("--animate", action="store_true", help="Show animation instead of static plot.")
     parser.add_argument(
         "--frame-by-frame",
@@ -859,27 +1570,31 @@ def main() -> None:
     parser.add_argument("--h1", nargs="+", default=None, help="Filter H1 values (example: --h1 0.5).")
     parser.add_argument("--h2", nargs="+", default=None, help="Filter H2 values (example: --h2 0.75).")
     parser.add_argument("--dr", nargs="+", default=None, help="Filter Dr values (example: --dr 0.1).")
+    parser.add_argument(
+        "--boundary",
+        nargs="+",
+        default=None,
+        choices=["hard", "periodic", "none"],
+        help="Filter boundary type(s): hard, periodic, none.",
+    )
     parser.add_argument("--sim", nargs="+", type=int, default=None, help="Filter simulation ids (example: --sim 0 2).")
-    parser.add_argument("--R", type=float, default=1.0, help="Cell radius for intercellular force calculation.")
-    parser.add_argument("--W-s", type=float, default=1.0, dest="w_s", help="Cell-substrate adhesion term W_s.")
-    parser.add_argument("--W-c", type=float, default=0.5, dest="w_c", help="Cell-cell adhesion term W_c.")
     parser.add_argument(
         "--motor",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Show motor force arrows (default: hidden).",
+        default=None,
+        help="Show motor force arrows.",
     )
     parser.add_argument(
         "--noise",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Show fBm noise arrows (default: hidden).",
+        default=None,
+        help="Show fBm noise arrows.",
     )
     parser.add_argument(
         "--intercellular",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Show intercellular force arrows (default: hidden).",
+        default=None,
+        help="Show intercellular force arrows.",
     )
     parser.add_argument(
         "--intercellular-time",
@@ -914,6 +1629,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.gui:
+        PlotterGUI().run()
+        return
+
     if args.max_simulations <= 0:
         raise ValueError("--max-simulations must be a positive integer")
     if args.step <= 0:
@@ -930,19 +1649,31 @@ def main() -> None:
         h1=_normalize_filter_values(args.h1),
         h2=_normalize_filter_values(args.h2),
         dr=_normalize_filter_values(args.dr),
+        boundary=set(args.boundary) if args.boundary else None,
         sim=_normalize_sim_filter(args.sim),
     )
 
-    npz_files = find_multicellular_files(args.data_dir, filters=filters)
+    cli_files = _parse_npz_list(args.files)
+    if cli_files:
+        npz_files = []
+        for p in cli_files:
+            sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(p)
+            if _is_multicellular_file(p) and _matches_filters(sim_id, alpha, h1, h2, dr, boundary, filters):
+                npz_files.append(p)
+    else:
+        npz_files = find_multicellular_files(args.data_dir, filters=filters)
+
     if not npz_files:
         raise FileNotFoundError(
             "No multicellular trajectory NPZ files found for selected filters under "
-            f"{args.data_dir} (alpha={args.alpha}, H1={args.h1}, H2={args.h2}, Dr={args.dr}, sim={args.sim})"
+            f"{args.data_dir} (alpha={args.alpha}, H1={args.h1}, H2={args.h2}, Dr={args.dr}, boundary={args.boundary}, sim={args.sim})"
         )
 
-    show_motor = args.motor
-    show_noise = args.noise
-    show_intercellular = args.intercellular
+    show_motor, show_noise, show_intercellular = _resolve_arrow_visibility(
+        args.motor,
+        args.noise,
+        args.intercellular,
+    )
 
     if args.animate and args.frame_by_frame:
         raise ValueError("Use either --animate or --frame-by-frame, not both.")
@@ -954,9 +1685,9 @@ def main() -> None:
             show_plot=args.show,
             save_gif=args.save_gif,
             max_simulations=args.max_simulations,
-            cell_radius=args.R,
-            adhesion_substrate=args.w_s,
-            adhesion_cell=args.w_c,
+            cell_radius=PLOT_CELL_RADIUS,
+            adhesion_substrate=PLOT_W_S,
+            adhesion_cell=PLOT_W_C,
             show_motor=show_motor,
             show_noise=show_noise,
             show_intercellular=show_intercellular,
@@ -972,9 +1703,9 @@ def main() -> None:
             npz_files,
             args.title,
             max_simulations=args.max_simulations,
-            cell_radius=args.R,
-            adhesion_substrate=args.w_s,
-            adhesion_cell=args.w_c,
+            cell_radius=PLOT_CELL_RADIUS,
+            adhesion_substrate=PLOT_W_S,
+            adhesion_cell=PLOT_W_C,
             show_motor=show_motor,
             show_noise=show_noise,
             show_intercellular=show_intercellular,
@@ -994,9 +1725,9 @@ def main() -> None:
             show_motor=show_motor,
             show_noise=show_noise,
             show_intercellular=show_intercellular,
-            cell_radius=args.R,
-            adhesion_substrate=args.w_s,
-            adhesion_cell=args.w_c,
+            cell_radius=PLOT_CELL_RADIUS,
+            adhesion_substrate=PLOT_W_S,
+            adhesion_cell=PLOT_W_C,
             intercellular_time=args.intercellular_time,
             arrow_scale=args.arrow_scale,
             arrow_gain=args.arrow_gain,

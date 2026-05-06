@@ -6,7 +6,7 @@ import os
 
 start_time = time.time()
 
-boundary = 'hard' # Boundaries: 'periodic', 'hard', 'none'
+boundary = 'periodic' # Boundaries: 'periodic', 'hard', 'none'
 
 # SET UP
 replicates = 1     # Number of replicates for each parameter set
@@ -50,14 +50,15 @@ for Hval1 in range(len(H1_values)):
             H1_str = str.replace(str(H1), '.', '_')
             H2_str = str.replace(str(H2), '.', '_')
             Alpha_str = str.replace(str(alpha), '.', '_')
+            Boundary_str = boundary.capitalize()
 
-            main_path = f'DATA/Alpha_{Alpha_str}/H1_{H1_str}_H2_{H2_str}/Dr_{Dr_str}/'
+            main_path = f'DATA/Alpha_{Alpha_str}/H1_{H1_str}_H2_{H2_str}/Dr_{Dr_str}/Boundary_{Boundary_str}'
             os.makedirs(main_path, exist_ok=True)
 
-            print(f"Initializing set: Dr={Dr_values[Drval]}, H1={H1}, H2={H2}, Alpha={alpha}")
+            print(f"Initializing set: Dr={Dr_values[Drval]}, H1={H1}, H2={H2}, Alpha={alpha}, Boundary={boundary}")
 
             for sim in range(replicates):
-                filename = f'Sim_{sim}_Dr_{Dr_str}_H1_{H1_str}_H2_{H2_str}_Alpha_{Alpha_str}.npz'
+                filename = f'Sim_{sim}_Dr_{Dr_str}_H1_{H1_str}_H2_{H2_str}_Alpha_{Alpha_str}_Boundary_{Boundary_str}.npz'
                 path_save = os.path.join(main_path, filename)
                 if os.path.exists(path_save):
                     print(f"File {filename} already exists. Skipping simulation {sim}.")
