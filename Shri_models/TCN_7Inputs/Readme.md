@@ -123,6 +123,7 @@ After the 6 residual blocks, global average pooling over the time dimension coll
 
 
 Why Huber loss?- Targets are standardized (zero-mean, unit-variance via `StandardScaler`), so most residuals fall well within the quadratic region (|error| ≤ 1.0, δ = 1.0 default), giving MSE-like smooth gradient flow near convergence. The linear regime (|error| > 1.0) acts as a safety net against the few large residuals from boundary-regime trajectories early in training, preventing them from dominating gradients. Essentially MSE for this case — until an outlier decides otherwise.
+
 ---
 
 ## 7. Data Split Strategy
