@@ -1,0 +1,10 @@
+Results for Model: HYBRID | Targets: ['Dr', 'H']
+============================================================
+Variable: Dr
+  RMSE : 7.3031
+  MAE  : 2.6755
+  R2   : 0.9590
+Variable: H
+  RMSE : 0.0206
+  MAE  : 0.0147
+  R2   : 0.9891
