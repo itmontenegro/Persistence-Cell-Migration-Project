@@ -96,7 +96,7 @@ Causal padding of `(kernel_size − 1) × dilation` is added before each convolu
 
 **Receptive field:** RF = 1 + 2 × (1+2+4+8+16+32) = **127 timesteps**
 
-After the encoder, **global average pooling** over the time dimension collapses `[B × 512 × T]` → `[B × 512]`, making the representation independent of variable sequence lengths introduced by padding. A final `Linear(512, 2)` outputs normalized predictions for `(Dr, H)`.
+After the 6 residual blocks, global average pooling over the time dimension collapses [B × 512 × T] → [B × 512], making the representation independent of variable sequence lengths introduced by padding. A final Linear(512, 2) outputs normalized predictions for (Dr, H).
 
 **Total parameters:** ~937,000
 
