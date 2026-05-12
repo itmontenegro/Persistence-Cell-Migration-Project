@@ -57,7 +57,7 @@ pip install -r requirements.txt
 Run the following command to start training:
 
 ```bash
-python train.py --data_path "data/Data_Alpha_0_25" --epochs 100 --batch_size 16 --lr 0.0001
+python train.py --data_path "data/Data_Alpha_0_25" --epochs 100 --batch_size 32 --lr 0.0005
 ```
 
 During training:
@@ -69,7 +69,7 @@ During training:
   * The best model is saved as:
 
 ```text
-saved_models/best_hybrid_Dr_H_2.pth
+saved_models/best_hybrid_Dr_H_Debo.pth
 ```
 
 ---
@@ -79,7 +79,7 @@ saved_models/best_hybrid_Dr_H_2.pth
 After training, evaluate the model using:
 
 ```bash
-python evaluate_and_visualize.py --data_path "data/Data_Alpha_0_25" --checkpoint "saved_models/best_hybrid_Dr_H_2.pth" --batch_size 16
+python evaluate_and_visualize.py --data_path "data/Data_Alpha_0_25" --checkpoint "saved_models/best_hybrid_Dr_H_Debo.pth" --batch_size 32
 ```
 
 During evaluation:
