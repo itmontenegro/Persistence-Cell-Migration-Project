@@ -84,6 +84,9 @@ for Hval1 in range(len(H1_values)):
                 x_array = cp.zeros((N_cells, Nts))
                 y_array = cp.zeros((N_cells, Nts))
                 theta_array = cp.zeros((N_cells, Nts))
+
+                # Array to save the angle between three positions.
+                angle_array = cp.zeros((N_cells, Nts))
                 
                 # Distribute the cells randomly in a square domain to avoid initial overlaps
                 x_array[:, 0] = cp.random.uniform(-L_box, L_box, N_cells)
@@ -121,6 +124,9 @@ for Hval1 in range(len(H1_values)):
 
                     # Interaction masking: only consider interactions if R <= dist <= 2R (dist <= 2*R due to physical limitations)
                     mask = (dist <= 2*R)
+
+                    # Count neighbors and cluster size
+                    N_neighbors_array[:, t] = cp.sum(mask, axis=1)
 
                     # Velocity differences
                     dVx = velocity_x_array[:, t-1][:, None] - velocity_x_array[:, t-1][None, :]
@@ -190,6 +196,27 @@ for Hval1 in range(len(H1_values)):
                     # Update positions
                     x_array[:, t] = x_curr + (motor_x + sum_F_x / gamma_s) * dt + stoch_term_dx
                     y_array[:, t] = y_curr + (motor_y + sum_F_y / gamma_s) * dt + stoch_term_dy
+
+                    # Calculate the angle between three positions (t-2, t-1, t) for each cell
+                    if t > 2:
+                        v1_x = x_array[:, t-1] - x_array[:, t-2]
+                        v1_y = y_array[:, t-1] - y_array[:, t-2]
+                        v2_x = x_array[:, t] - x_array[:, t-1]
+                        v2_y = y_array[:, t] - y_array[:, t-1]
+
+                        # v1 · v2 = |v1| * |v2| * cos(angle) => angle = arccos((v1 · v2) / (|v1| * |v2|))
+                        # Calculate the angle using the dot product formula
+                        dot_product = v1_x * v2_x + v1_y * v2_y
+                        # We normalize the vectors to calculate directly the cosine of the angle.
+                        norm_v1 = cp.sqrt(v1_x**2 + v1_y**2)
+                        norm_v2 = cp.sqrt(v2_x**2 + v2_y**2)
+
+                        # To avoid division by zero, add a small epsilon to the denominator
+                        epsilon = 1e-10
+                        cos_angle = dot_product / (norm_v1 * norm_v2 + epsilon)
+                        cos_angle = cp.clip(cos_angle, -1.0, 1.0)  # Clip to valid range for arccos
+
+                        angle_array[:, t] = cp.arccos(cos_angle)
                     
                     # Apply boundary conditions
                     if boundary == 'periodic':
@@ -212,6 +239,7 @@ for Hval1 in range(len(H1_values)):
                     x_array=cp.asnumpy(x_array),
                     y_array=cp.asnumpy(y_array),
                     theta_array=cp.asnumpy(theta_array),
+                    angle_array=cp.asnumpy(angle_array),
                     fmpi_x_array=cp.asnumpy(fmpi_x_array),
                     fmpi_y_array=cp.asnumpy(fmpi_y_array),
                     xi_x_array=cp.asnumpy(xi_x_array),
