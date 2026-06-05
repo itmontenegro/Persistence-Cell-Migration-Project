@@ -87,6 +87,12 @@ for Hval1 in range(len(H1_values)):
 
                 # Array to save the angle between three positions.
                 angle_array = cp.zeros((N_cells, Nts))
+
+                # Array to save the cluster size for each cell.
+                cluster_size_array = cp.zeros((N_cells, Nts))
+
+                # Array to save how many clusters there are in each step.
+                n_clusters_array = cp.zeros(Nts)
                 
                 # Distribute the cells randomly in a square domain to avoid initial overlaps
                 x_array[:, 0] = cp.random.uniform(-L_box, L_box, N_cells)
@@ -116,6 +122,10 @@ for Hval1 in range(len(H1_values)):
                     dX = x_curr[:, None] - x_curr[None, :]
                     dY = y_curr[:, None] - y_curr[None, :]
 
+                    if boundary == 'periodic':
+                        dX = dX - 2 * L_box * cp.round(dX / (2 * L_box))
+                        dY = dY - 2 * L_box * cp.round(dY / (2 * L_box))
+                    
                     # Distance matrix
                     dist = cp.sqrt(dX**2 + dY**2)
                     
@@ -125,6 +135,20 @@ for Hval1 in range(len(H1_values)):
                     # Interaction masking: only consider interactions if R <= dist <= 2R (dist <= 2*R due to physical limitations)
                     mask = (dist <= 2*R)
 
+                    # Convert the mask to a sparse matrix
+                    sparse_adj = cpx_sparse.csr_matrix(mask)
+
+                    # Get the number of clusters and labels mapping each cell to a cluster ID
+                    n_clusters, labels = cpx_sparse.csgraph.connected_components(
+                        sparse_adj, directed=False, connection='weak'
+                    )
+
+                    # Count how many cells are in each cluster ID
+                    unique_labels, counts = cp.unique(labels, return_counts=True)
+
+                    # Map the size of the cluster back to each cell
+                    cluster_size_array[:, t] = counts[labels]
+                    
                     # Count neighbors and cluster size
                     N_neighbors_array[:, t] = cp.sum(mask, axis=1)
 
@@ -240,6 +264,8 @@ for Hval1 in range(len(H1_values)):
                     y_array=cp.asnumpy(y_array),
                     theta_array=cp.asnumpy(theta_array),
                     angle_array=cp.asnumpy(angle_array),
+                    cluster_size_array=cp.asnumpy(cluster_size_array),
+                    n_clusters_array=cp.asnumpy(n_clusters_array),
                     fmpi_x_array=cp.asnumpy(fmpi_x_array),
                     fmpi_y_array=cp.asnumpy(fmpi_y_array),
                     xi_x_array=cp.asnumpy(xi_x_array),
