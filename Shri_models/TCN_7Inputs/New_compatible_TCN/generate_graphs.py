@@ -183,12 +183,12 @@ def evaluate_and_plot():
     
     weights_path = "base_tcn_7in.pth"
     if not os.path.exists(weights_path):
-        print(f"❌ Could not find {weights_path}! Make sure the script is in the same folder as your saved model.")
+        print(f" Could not find {weights_path}! Make sure the script is in the same folder as your saved model.")
         return
         
     model.load_state_dict(torch.load(weights_path, map_location=device))
     model.eval()
-    print("✅ Model weights loaded successfully! Running inference on Test Set...")
+    print(" Model weights loaded successfully! Running inference on Test Set...")
 
     # 3. Collect Predictions
     all_p_norm, all_y_norm = [], []
