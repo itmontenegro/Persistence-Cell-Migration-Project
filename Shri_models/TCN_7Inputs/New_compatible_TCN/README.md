@@ -9,6 +9,7 @@ Because tracking data is sequential and statistical stability is a priority, the
 ### How the Split is Done:
 1. **Per-Array Partitioning:** Each trajectory array is sliced along its primary temporal/sequence axis to prevent future lookahead bias.
 2. **Segment Allocation:** For every continuous sequence array:
-   * The initial **80%** of the continuous sequence timeline is allocated as the **Training Set** to let the model capture localized velocity gradients.
-   * The remaining **20%** of the timeline is reserved as the **Testing Set** to validate how well the network generalizes to future frames.
-3. **Shape Preservation:** The extraction maintains the 7-channel sequence configuration required by the network layers in `base_tcn_7in.pth`[cite: 4], guaranteeing uniform array shapes across both sets after the split.
+   * The initial **70%** of the continuous sequence timeline is allocated as the **Training Set** to let the model capture localized velocity gradients.
+   * The  **20%** of the timeline is reserved as the **Testing Set** to validate how well the network generalizes to future frames.
+   * The remaining **10%** of the timeline is used for  **Validation Set** .
+3. **Shape Preservation:** The extraction maintains the 7-channel sequence configuration required by the network layers in `base_tcn_7in.pth`, guaranteeing uniform array shapes across both sets after the split.
