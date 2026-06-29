@@ -25,4 +25,4 @@ This process extracts local, continuous velocity components across the tracking 
 3. **Bounded Scale:** Velocity components drastically reduce raw scalar variance, eliminating extreme gradient spikes and ensuring steady parameter optimization.
 
 ## Model Alignment
-The `base_tcn_7in.pth` checkpoint is fully optimized for this velocity-driven paradigm[cite: 4]. The 7-channel input dimension natively digests these multi-component delta trajectories, enabling stable temporal tracking and highly generalized trajectory mapping.
+The `base_tcn_7in.pth` checkpoint is fully optimized for this velocity-driven paradigm. The 7-channel input dimension natively digests these multi-component delta trajectories, enabling stable temporal tracking and highly generalized trajectory mapping.
