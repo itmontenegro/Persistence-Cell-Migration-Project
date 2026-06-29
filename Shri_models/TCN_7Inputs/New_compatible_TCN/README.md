@@ -1,28 +1,14 @@
-# Temporal Convolutional Network (TCN) - Transition to Velocity Dynamics
+# Temporal Convolutional Network (TCN) - Train/Test Array Splitting
 
-This repository contains the weights and configuration for the 7-input Temporal Convolutional Network (`base_tcn_7in.pth`). This README details the critical workflow modification applied to the tracking sequences to establish statistical stability and ensure robust model convergence.
+This repository utilizes a specific index-masking and segment-extraction approach to partition the trajectory arrays into training and testing sets while preserving sequential dependency.
 
-## Core Methodology: Shift to Velocity Dynamics
+## Train/Test Splitting Strategy
 
-### The Problem with Raw Trajectories
-Processing sequence-based tracking using absolute, raw spatial coordinates creates severe statistical instabilities. Models operating directly on absolute spatial domains are highly susceptible to:
-* **Tracking Drift:** Accumulated spatial deviations across extended frames.
-* **Lack of Translation Invariance:** The model bounds itself to the coordinate grid layout of the training field instead of generalizing movement features.
-* **Unbounded Scale Variance:** Extreme variances across different coordinate dimensions destabilizing gradient updates.
+Because tracking data is sequential and statistical stability is a priority, the data from each input array is split into **Train** and **Test** sets using a structured temporal segment split rather than a random shuffle.
 
-### The Solution: Velocity-Based Splitting
-To fix this, the input pipeline applies a temporal first-derivative transformation across the coordinate sequence. Instead of passing absolute grid positions, the trajectory is split into continuous frame-to-frame displacement components:
-
-$$\Delta x_t = x_t - x_{t-1}$$
-$$\Delta y_t = y_t - y_{t-1}$$
-
-This process extracts local, continuous velocity components across the tracking timelines, fundamentally shifting the feature domain from spatial positions to sequential velocity vectors.
-
-## Key Statistical Impacts
-
-1. **Translation Invariance:** By stripping absolute grid contexts, the network evaluates trajectory geometries universally, regardless of where on the coordinate map the sequence began.
-2. **Stationary Mean:** Converting the features into velocity dynamics centers the sequence inputs around a stable, consistent mean, preventing network drift.
-3. **Bounded Scale:** Velocity components drastically reduce raw scalar variance, eliminating extreme gradient spikes and ensuring steady parameter optimization.
-
-## Model Alignment
-The `base_tcn_7in.pth` checkpoint is fully optimized for this velocity-driven paradigm. The 7-channel input dimension natively digests these multi-component delta trajectories, enabling stable temporal tracking and highly generalized trajectory mapping.
+### How the Split is Done:
+1. **Per-Array Partitioning:** Each trajectory array is sliced along its primary temporal/sequence axis to prevent future lookahead bias.
+2. **Segment Allocation:** For every continuous sequence array:
+   * The initial **80%** of the continuous sequence timeline is allocated as the **Training Set** to let the model capture localized velocity gradients.
+   * The remaining **20%** of the timeline is reserved as the **Testing Set** to validate how well the network generalizes to future frames.
+3. **Shape Preservation:** The extraction maintains the 7-channel sequence configuration required by the network layers in `base_tcn_7in.pth`[cite: 4], guaranteeing uniform array shapes across both sets after the split.
