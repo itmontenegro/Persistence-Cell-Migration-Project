@@ -62,7 +62,6 @@ class BaseTCNRegressor(nn.Module):
 
     def forward(self, x, lengths):
         x = self.encoder(x.permute(0, 2, 1))
-        # Global Avg. Pooling
         pooled = torch.mean(x, dim=2) 
         return self.fc(pooled)
 
@@ -108,7 +107,7 @@ class TrajectoryDataset(Dataset):
                 inputs_scaled[:, :, 0], # dx
                 inputs_scaled[:, :, 1], # dy
                 inputs_scaled[:, :, 2], # step_len
-                inputs_scaled[:, :, 3], # efficiency
+                inputs_scaled[:, :, 3], # straightness
                 np.sin(theta),          # sin(theta)
                 np.cos(theta),          # cos(theta)
                 net_disp_normed         # net_disp_normed
@@ -145,7 +144,7 @@ class DataManager:
         print(f"Target Directory: {self.base_path}")
         
         if not os.path.exists(self.base_path):
-            print("❌ FATAL: Directory does not exist! Please check the absolute path.")
+            print(" FATAL: Directory does not exist! Please check the absolute path.")
             print("="*50 + "\n")
             return
             
@@ -165,9 +164,9 @@ class DataManager:
                 vals = [float(x.replace('_', '.')) for x in m.groups()]
                 self.files.append((p, *vals))
             else:
-                print(f"⚠️ Regex failed on: {os.path.basename(p)}")
+                print(f" Regex failed on: {os.path.basename(p)}")
 
-        print(f"✅ Successfully loaded {len(self.files)} files into the pipeline.")
+        print(f" Successfully loaded {len(self.files)} files into the pipeline.")
         print("="*50 + "\n")
 
     def get_loaders(self):
@@ -216,7 +215,7 @@ def run_pipeline():
     data_gen = DataManager(base_path="/Users/karan/Downloads/CellMigration_Project/DATA_TEST", batch_size=16)
     loaders = data_gen.get_loaders()
     
-    # strictly 7 inputs, outputting exactly 2 predictions
+    # strictly 7 inputs, output exactly 2 predictions
     model = BaseTCNRegressor(input_size=7).to(device)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
