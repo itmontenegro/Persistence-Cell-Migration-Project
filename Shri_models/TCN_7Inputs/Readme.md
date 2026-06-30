@@ -65,7 +65,7 @@ Each trajectory is transformed into a **7-dimensional feature sequence** `[T × 
 |---|---|
 | `dx`, `dy` | Per-step displacements |
 | `step_len` | Euclidean step length `√(dx²+dy²)` |
-| `efficiency` | `net_disp / (cum_dist + ε)` — path straightness |
+| `persistence ` | `net_disp / (cum_dist + ε)` — path straightness |
 | `sin(θ)`, `cos(θ)` | Circular encoding of heading angle (avoids 0/2π discontinuity) |
 | `net_disp_norm` | Net displacement normalized by per-trajectory maximum |
 
