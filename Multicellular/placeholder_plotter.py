@@ -49,6 +49,8 @@ class SimulationRecord:
     h2: str
     dr: str
     boundary: str
+    cluster_size: np.ndarray | None = None
+    n_clusters: np.ndarray | None = None
 
 
 @dataclass
@@ -173,9 +175,16 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
             fmpi_y = data["fmpi_y_array"]
             xi_x = data["xi_x_array"]
             xi_y = data["xi_y_array"]
+            cluster_size = data["cluster_size_array"] if "cluster_size_array" in data.files else None
+            n_clusters = data["n_clusters_array"] if "n_clusters_array" in data.files else None
 
         if x.ndim != 2 or y.ndim != 2 or x.shape != y.shape:
             continue
+
+        if cluster_size is not None and (cluster_size.ndim != 2 or cluster_size.shape != x.shape):
+            cluster_size = None
+        if n_clusters is not None and n_clusters.ndim != 1:
+            n_clusters = None
 
         sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(npz_file)
         records.append(
@@ -194,6 +203,8 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
                 h2=h2,
                 dr=dr,
                 boundary=boundary,
+                cluster_size=cluster_size,
+                n_clusters=n_clusters,
             )
         )
 
@@ -255,6 +266,186 @@ def _build_record_colors(records: list[SimulationRecord]) -> dict[Path, tuple[fl
     return {file: cmap(idx / denom) for idx, file in enumerate(files)}
 
 
+def _cluster_marker_area(cluster_size: float) -> float:
+    return 30.0 + 18.0 * max(float(cluster_size), 1.0)
+
+
+def _cluster_circle_radius(cluster_size: float, base_radius: float) -> float:
+    return base_radius * (0.7 + 0.12 * np.sqrt(max(float(cluster_size), 1.0)))
+
+
+def _cluster_sizes_from_positions(x_curr: np.ndarray, y_curr: np.ndarray, cell_radius: float) -> np.ndarray:
+    d_x = x_curr[:, None] - x_curr[None, :]
+    d_y = y_curr[:, None] - y_curr[None, :]
+    dist = np.sqrt(d_x**2 + d_y**2)
+    np.fill_diagonal(dist, np.inf)
+
+    adjacency = dist <= 2.0 * cell_radius
+    n_cells = adjacency.shape[0]
+    labels = -np.ones(n_cells, dtype=int)
+    cluster_id = 0
+
+    for start in range(n_cells):
+        if labels[start] != -1:
+            continue
+
+        stack = [start]
+        labels[start] = cluster_id
+        while stack:
+            cell = stack.pop()
+            neighbors = np.flatnonzero(adjacency[cell] & (labels == -1))
+            if neighbors.size == 0:
+                continue
+            labels[neighbors] = cluster_id
+            stack.extend(neighbors.tolist())
+
+        cluster_id += 1
+
+    counts = np.bincount(labels, minlength=cluster_id)
+    return counts[labels]
+
+
+def _cluster_components_from_positions(
+    x_curr: np.ndarray,
+    y_curr: np.ndarray,
+    cell_radius: float,
+) -> list[np.ndarray]:
+    d_x = x_curr[:, None] - x_curr[None, :]
+    d_y = y_curr[:, None] - y_curr[None, :]
+    dist = np.sqrt(d_x**2 + d_y**2)
+    np.fill_diagonal(dist, np.inf)
+
+    adjacency = dist <= 2.0 * cell_radius
+    n_cells = adjacency.shape[0]
+    labels = -np.ones(n_cells, dtype=int)
+    components: list[np.ndarray] = []
+
+    for start in range(n_cells):
+        if labels[start] != -1:
+            continue
+
+        stack = [start]
+        component = []
+        labels[start] = len(components)
+
+        while stack:
+            cell = stack.pop()
+            component.append(cell)
+            neighbors = np.flatnonzero(adjacency[cell] & (labels == -1))
+            if neighbors.size == 0:
+                continue
+            labels[neighbors] = len(components)
+            stack.extend(neighbors.tolist())
+
+        components.append(np.array(component, dtype=int))
+
+    return components
+
+
+def _draw_cluster_overlays(
+    ax: plt.Axes,
+    x_curr: np.ndarray,
+    y_curr: np.ndarray,
+    cell_radius: float,
+    color: str,
+    show_circle: bool = True,
+    show_number: bool = True,
+) -> None:
+    components = _cluster_components_from_positions(x_curr, y_curr, cell_radius)
+    for component in components:
+        if component.size == 0:
+            continue
+
+        xs = x_curr[component]
+        ys = y_curr[component]
+        center_x = float(np.mean(xs))
+        center_y = float(np.mean(ys))
+        spread = float(np.max(np.sqrt((xs - center_x) ** 2 + (ys - center_y) ** 2))) if component.size > 1 else 0.0
+        overlay_radius = max(cell_radius * 0.9, spread + cell_radius * 0.6)
+
+        if show_circle:
+            ring = Circle(
+                (center_x, center_y),
+                radius=overlay_radius,
+                facecolor="none",
+                edgecolor=color,
+                linestyle="--",
+                linewidth=1.6,
+                alpha=0.8,
+            )
+            ax.add_patch(ring)
+        if show_number:
+            ax.text(
+                center_x,
+                center_y,
+                str(component.size),
+                color=color,
+                fontsize=9,
+                fontweight="bold",
+                ha="center",
+                va="center",
+                bbox={"boxstyle": "round,pad=0.18", "fc": "white", "ec": color, "alpha": 0.85},
+            )
+
+
+def _cluster_sizes_for_record(rec: SimulationRecord, t: int, cell_radius: float) -> np.ndarray:
+    if rec.cluster_size is not None:
+        return rec.cluster_size[:, t]
+    return _cluster_sizes_from_positions(rec.x[:, t], rec.y[:, t], cell_radius)
+
+
+def _add_overlay_artists(
+    ax: plt.Axes,
+    x_curr: np.ndarray,
+    y_curr: np.ndarray,
+    cell_radius: float,
+    color: str,
+    label_prefix: str,
+    show_circle: bool = True,
+    show_number: bool = True,
+) -> list[object]:
+    artists: list[object] = []
+    for component in _cluster_components_from_positions(x_curr, y_curr, cell_radius):
+        if component.size == 0:
+            continue
+
+        xs = x_curr[component]
+        ys = y_curr[component]
+        center_x = float(np.mean(xs))
+        center_y = float(np.mean(ys))
+        spread = float(np.max(np.sqrt((xs - center_x) ** 2 + (ys - center_y) ** 2))) if component.size > 1 else 0.0
+        overlay_radius = max(cell_radius * 0.9, spread + cell_radius * 0.6)
+
+        if show_circle:
+            ring = Circle(
+                (center_x, center_y),
+                radius=overlay_radius,
+                facecolor="none",
+                edgecolor=color,
+                linestyle="--",
+                linewidth=1.6,
+                alpha=0.8,
+            )
+            ax.add_patch(ring)
+            artists.append(ring)
+
+        if show_number:
+            text = ax.text(
+                center_x,
+                center_y,
+                f"{label_prefix}{component.size}",
+                color=color,
+                fontsize=9,
+                fontweight="bold",
+                ha="center",
+                va="center",
+                bbox={"boxstyle": "round,pad=0.18", "fc": "white", "ec": color, "alpha": 0.85},
+            )
+            artists.append(text)
+
+    return artists
+
+
 def _resolve_arrow_visibility(
     motor: bool | None,
     noise: bool | None,
@@ -282,6 +473,8 @@ def plot_multicellular(
     arrow_scale: float,
     arrow_gain: float,
     show_path: bool,
+    show_cluster_circles: bool = True,
+    show_cluster_numbers: bool = True,
 ) -> None:
     records = _load_records(npz_files, max_simulations=max_simulations)
     if not records:
@@ -293,6 +486,8 @@ def plot_multicellular(
     for rec in records:
         color = colors[rec.file]
         n_cells, n_steps = rec.x.shape
+        start_cluster_sizes = _cluster_sizes_for_record(rec, 0, cell_radius)
+        end_cluster_sizes = _cluster_sizes_for_record(rec, n_steps - 1, cell_radius)
 
         if intercellular_time == "start":
             t_force = 0
@@ -316,38 +511,26 @@ def plot_multicellular(
             label = _record_label(rec) if cell_id == 0 else None
             if show_path:
                 ax.plot(x, y, linewidth=1.2, alpha=0.9, color=color, label=label)
-            ax.scatter(x[0], y[0], s=10, marker="o", color=color, alpha=0.85)
-            ax.scatter(x[-1], y[-1], s=20, marker="x", color=color, alpha=0.95)
-
-            if show_motor:
-                ax.quiver(
-                    x[-1],
-                    y[-1],
-                    arrow_gain * rec.fmpi_x[cell_id, -1],
-                    arrow_gain * rec.fmpi_y[cell_id, -1],
-                    angles="xy",
-                    scale_units="xy",
-                    scale=arrow_scale,
-                    width=0.0025,
-                    pivot="mid",
-                    color="tab:blue",
-                    alpha=0.85,
-                )
-
-            if show_noise:
-                ax.quiver(
-                    x[-1],
-                    y[-1],
-                    arrow_gain * rec.xi_x[cell_id, -1],
-                    arrow_gain * rec.xi_y[cell_id, -1],
-                    angles="xy",
-                    scale_units="xy",
-                    scale=arrow_scale,
-                    width=0.0025,
-                    pivot="mid",
-                    color="tab:red",
-                    alpha=0.75,
-                )
+            ax.scatter(
+                x[0],
+                y[0],
+                s=_cluster_marker_area(start_cluster_sizes[cell_id]),
+                marker="o",
+                facecolors="white",
+                edgecolors=color,
+                linewidths=1.0,
+                alpha=0.9,
+            )
+            ax.scatter(
+                x[-1],
+                y[-1],
+                s=_cluster_marker_area(end_cluster_sizes[cell_id]),
+                marker="o",
+                facecolors=color,
+                edgecolors="black",
+                linewidths=0.8,
+                alpha=0.9,
+            )
 
             if show_intercellular:
                 ax.quiver(
@@ -364,6 +547,16 @@ def plot_multicellular(
                     alpha=0.9,
                 )
 
+        _draw_cluster_overlays(
+            ax,
+            rec.x[:, t_force],
+            rec.y[:, t_force],
+            cell_radius,
+            color,
+            show_circle=show_cluster_circles,
+            show_number=show_cluster_numbers,
+        )
+
     handles = []
     if show_motor:
         handles.append(Line2D([0], [0], color="tab:blue", lw=2, label="Motor force"))
@@ -372,6 +565,11 @@ def plot_multicellular(
     if show_intercellular:
         handles.append(Line2D([0], [0], color="tab:green", lw=2, label="Intercellular force"))
     handles.append(Line2D([0], [0], color="black", lw=2, label="Trajectory (per simulation color)"))
+    handles.append(Line2D([0], [0], marker="o", linestyle="None", color="gray", markersize=8, label="Marker size ~ cluster size"))
+    if show_cluster_circles:
+        handles.append(Line2D([0], [0], color="gray", lw=1.6, ls="--", label="Cluster outline"))
+    if show_cluster_numbers:
+        handles.append(Line2D([0], [0], marker="", linestyle="None", color="none", label="Cluster size label"))
 
     ax.set_title(title)
     ax.set_xlabel("X")
@@ -393,6 +591,15 @@ def plot_multicellular(
             fontsize=8,
             bbox={"boxstyle": "round,pad=0.3", "fc": "white", "ec": "0.8", "alpha": 0.9},
         )
+
+    ax.text(
+        0.02,
+        -0.08,
+        "Cluster size is encoded by marker area; larger circles mean larger connected components.",
+        transform=ax.transAxes,
+        fontsize=8,
+        va="top",
+    )
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -422,12 +629,15 @@ def animate_multicellular(
     arrow_gain: float = 15.0,
     follow_cells: bool = True,
     show_path: bool = True,
+    show_cluster_circles: bool = True,
+    show_cluster_numbers: bool = True,
 ) -> None:
     records = _load_records(npz_files, max_simulations=max_simulations)
     if not records:
         raise ValueError("No valid multicellular simulations to animate.")
 
     colors = _build_record_colors(records)
+    record_index = {id(rec): idx for idx, rec in enumerate(records)}
 
     all_x = np.concatenate([rec.x.ravel() for rec in records])
     all_y = np.concatenate([rec.y.ravel() for rec in records])
@@ -455,10 +665,12 @@ def animate_multicellular(
     motor_quivers = []
     noise_quivers = []
     inter_quivers = []
+    cluster_overlay_artists: list[object] = []
 
     for rec in records:
         color = colors[rec.file]
         n_cells = rec.x.shape[0]
+        initial_cluster_sizes = _cluster_sizes_for_record(rec, 0, cell_radius)
 
         for cell_id in range(n_cells):
             (line,) = ax.plot([], [], linewidth=1.0, alpha=0.6, color=color)
@@ -532,6 +744,7 @@ def animate_multicellular(
     if show_intercellular:
         legend_handles.append(Line2D([0], [0], color="tab:green", lw=2, label="Intercellular force"))
     legend_handles.append(Line2D([0], [0], color="black", lw=2, label="Trajectory"))
+    legend_handles.append(Line2D([0], [0], marker="o", linestyle="None", color="gray", markersize=8, label="Marker size ~ cluster size"))
     ax.legend(handles=legend_handles, loc="best", fontsize=8)
 
     time_text = ax.text(0.02, 0.96, "", transform=ax.transAxes, fontsize=9, va="top")
@@ -556,6 +769,21 @@ def animate_multicellular(
         for marker, rec, cell_id in cell_markers:
             marker.center = (rec.x[cell_id, 0], rec.y[cell_id, 0])
             artists.append(marker)
+        cluster_overlay_artists.clear()
+        for rec in records:
+                cluster_overlay_artists.extend(
+                    _add_overlay_artists(
+                        ax,
+                        rec.x[:, 0],
+                        rec.y[:, 0],
+                        cell_radius,
+                        colors[rec.file],
+                        "n=",
+                        show_circle=show_cluster_circles,
+                        show_number=show_cluster_numbers,
+                    )
+                )
+        artists.extend(cluster_overlay_artists)
         time_text.set_text("")
         artists.append(time_text)
         return artists
@@ -563,6 +791,15 @@ def animate_multicellular(
     def _update(frame_idx: int):
         k = frame_indices[frame_idx]
         artists: list[object] = []
+        cluster_sizes_by_record = [_cluster_sizes_for_record(rec, k, cell_radius) for rec in records]
+
+        for artist in cluster_overlay_artists:
+            if hasattr(artist, "remove"):
+                try:
+                    artist.remove()
+                except ValueError:
+                    pass
+        cluster_overlay_artists.clear()
 
         if follow_cells:
             x_now = np.concatenate([rec.x[:, k] for rec in records])
@@ -585,7 +822,9 @@ def animate_multicellular(
                 artists.append(line)
 
         for marker, rec, cell_id in cell_markers:
+            cluster_sizes = cluster_sizes_by_record[record_index[id(rec)]]
             marker.center = (rec.x[cell_id, k], rec.y[cell_id, k])
+            marker.radius = cell_radius
             artists.append(marker)
 
         for rec_idx, rec in enumerate(records):
@@ -624,6 +863,21 @@ def animate_multicellular(
 
         time_text.set_text(f"Step {k}/{n_steps - 1}")
         artists.append(time_text)
+
+        for rec in records:
+            cluster_overlay_artists.extend(
+                _add_overlay_artists(
+                    ax,
+                    rec.x[:, k],
+                    rec.y[:, k],
+                    cell_radius,
+                    colors[rec.file],
+                    "n=",
+                    show_circle=show_cluster_circles,
+                    show_number=show_cluster_numbers,
+                )
+            )
+        artists.extend(cluster_overlay_artists)
         return artists
 
     anim = animation.FuncAnimation(
@@ -661,12 +915,15 @@ def frame_by_frame_multicellular(
     arrow_gain: float = 15.0,
     follow_cells: bool = True,
     show_path: bool = True,
+    show_cluster_circles: bool = True,
+    show_cluster_numbers: bool = True,
 ) -> None:
     records = _load_records(npz_files, max_simulations=max_simulations)
     if not records:
         raise ValueError("No valid multicellular simulations to inspect.")
 
     colors = _build_record_colors(records)
+    record_index = {id(rec): idx for idx, rec in enumerate(records)}
 
     all_x = np.concatenate([rec.x.ravel() for rec in records])
     all_y = np.concatenate([rec.y.ravel() for rec in records])
@@ -691,10 +948,12 @@ def frame_by_frame_multicellular(
     motor_quivers = []
     noise_quivers = []
     inter_quivers = []
+    cluster_overlay_artists: list[object] = []
 
     for rec in records:
         color = colors[rec.file]
         n_cells = rec.x.shape[0]
+        initial_cluster_sizes = _cluster_sizes_for_record(rec, 0, cell_radius)
 
         for cell_id in range(n_cells):
             (line,) = ax.plot([], [], linewidth=1.0, alpha=0.6, color=color)
@@ -768,6 +1027,7 @@ def frame_by_frame_multicellular(
     if show_intercellular:
         legend_handles.append(Line2D([0], [0], color="tab:green", lw=2, label="Intercellular force"))
     legend_handles.append(Line2D([0], [0], color="black", lw=2, label="Trajectory"))
+    legend_handles.append(Line2D([0], [0], marker="o", linestyle="None", color="gray", markersize=8, label="Marker size ~ cluster size"))
     ax.legend(handles=legend_handles, loc="best", fontsize=8)
 
     help_text = "Controls: Left/Right = +/-1 frame | Down/Up = -/+10 frames | Home/End = first/last"
@@ -797,6 +1057,15 @@ def frame_by_frame_multicellular(
     state = {"k": 0}
 
     def _render_frame(k: int) -> None:
+        cluster_sizes_by_record = [_cluster_sizes_for_record(rec, k, cell_radius) for rec in records]
+        for artist in cluster_overlay_artists:
+            if hasattr(artist, "remove"):
+                try:
+                    artist.remove()
+                except ValueError:
+                    pass
+        cluster_overlay_artists.clear()
+
         if follow_cells:
             x_now = np.concatenate([rec.x[:, k] for rec in records])
             y_now = np.concatenate([rec.y[:, k] for rec in records])
@@ -816,7 +1085,9 @@ def frame_by_frame_multicellular(
                 line.set_data(rec.x[cell_id, : k + 1], rec.y[cell_id, : k + 1])
 
         for marker, rec, cell_id in cell_markers:
+            cluster_sizes = cluster_sizes_by_record[record_index[id(rec)]]
             marker.center = (rec.x[cell_id, k], rec.y[cell_id, k])
+            marker.radius = cell_radius
 
         for rec_idx, rec in enumerate(records):
             pos = np.column_stack((rec.x[:, k], rec.y[:, k]))
@@ -848,6 +1119,20 @@ def frame_by_frame_multicellular(
             else:
                 inter_quivers[rec_idx].set_offsets(pos)
                 inter_quivers[rec_idx].set_UVC(np.zeros(rec.x.shape[0]), np.zeros(rec.x.shape[0]))
+
+        for rec in records:
+                cluster_overlay_artists.extend(
+                    _add_overlay_artists(
+                        ax,
+                        rec.x[:, k],
+                        rec.y[:, k],
+                        cell_radius,
+                        colors[rec.file],
+                        "n=",
+                        show_circle=show_cluster_circles,
+                        show_number=show_cluster_numbers,
+                    )
+                )
 
         time_text.set_text(f"Frame {k}/{n_steps - 1}")
         fig.canvas.draw_idle()
@@ -924,6 +1209,8 @@ class PlotterGUI:
         self.intercellular_var = tk.BooleanVar(value=False)
         self.follow_var = tk.BooleanVar(value=True)
         self.show_path_var = tk.BooleanVar(value=False)
+        self.show_cluster_circles_var = tk.BooleanVar(value=True)
+        self.show_cluster_numbers_var = tk.BooleanVar(value=True)
 
         self.all_metadata: list[dict[str, object]] = []
         self.visible_metadata: list[dict[str, object]] = []
@@ -1037,6 +1324,8 @@ class PlotterGUI:
         tk.Checkbutton(frame_toggles, text="Intercellular", variable=self.intercellular_var, command=self._update_arrow_controls).grid(row=0, column=3, sticky="w", padx=6)
         tk.Checkbutton(frame_toggles, text="Follow cells", variable=self.follow_var).grid(row=0, column=4, sticky="w", padx=6)
         tk.Checkbutton(frame_toggles, text="Show path", variable=self.show_path_var).grid(row=0, column=5, sticky="w", padx=6)
+        tk.Checkbutton(frame_toggles, text="Cluster circles", variable=self.show_cluster_circles_var).grid(row=0, column=6, sticky="w", padx=6)
+        tk.Checkbutton(frame_toggles, text="Cluster numbers", variable=self.show_cluster_numbers_var).grid(row=0, column=7, sticky="w", padx=6)
 
         self.arrow_controls_frame = tk.LabelFrame(self.plot_tab, text="Arrow Settings")
         self.arrow_controls_frame.grid(row=4, column=0, sticky="ew", padx=8, pady=6)
@@ -1455,6 +1744,8 @@ class PlotterGUI:
             "arrow_gain": float(self.arrow_gain_var.get()),
             "follow_cells": bool(self.follow_var.get()),
             "show_path": bool(self.show_path_var.get()),
+            "show_cluster_circles": bool(self.show_cluster_circles_var.get()),
+            "show_cluster_numbers": bool(self.show_cluster_numbers_var.get()),
         }
 
     def _run_static(self) -> None:
@@ -1479,6 +1770,8 @@ class PlotterGUI:
                 arrow_scale=float(self.arrow_scale_var.get()),
                 arrow_gain=float(self.arrow_gain_var.get()),
                 show_path=bool(self.show_path_var.get()),
+                show_cluster_circles=bool(self.show_cluster_circles_var.get()),
+                show_cluster_numbers=bool(self.show_cluster_numbers_var.get()),
             )
             messagebox.showinfo("Success", "Static plot generated.")
         except Exception as exc:
@@ -1509,6 +1802,8 @@ class PlotterGUI:
                 arrow_gain=float(self.arrow_gain_var.get()),
                 follow_cells=bool(self.follow_var.get()),
                 show_path=bool(self.show_path_var.get()),
+                show_cluster_circles=bool(self.show_cluster_circles_var.get()),
+                show_cluster_numbers=bool(self.show_cluster_numbers_var.get()),
             )
             messagebox.showinfo("Success", "Animation complete.")
         except Exception as exc:
@@ -1535,6 +1830,8 @@ class PlotterGUI:
                 arrow_gain=float(self.arrow_gain_var.get()),
                 follow_cells=bool(self.follow_var.get()),
                 show_path=bool(self.show_path_var.get()),
+                show_cluster_circles=bool(self.show_cluster_circles_var.get()),
+                show_cluster_numbers=bool(self.show_cluster_numbers_var.get()),
             )
         except Exception as exc:
             messagebox.showerror("Frame mode failed", str(exc))
@@ -1627,6 +1924,18 @@ def main() -> None:
         default=False,
         help="Show full past trajectory paths (default: hidden).",
     )
+    parser.add_argument(
+        "--show-cluster-circles",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show dashed circle overlays for clusters (default: True).",
+    )
+    parser.add_argument(
+        "--show-cluster-numbers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show cluster size labels at cluster centers (default: True).",
+    )
     args = parser.parse_args()
 
     if args.gui:
@@ -1697,6 +2006,8 @@ def main() -> None:
             arrow_gain=args.arrow_gain,
             follow_cells=args.follow_cells,
             show_path=args.show_path,
+            show_cluster_circles=args.show_cluster_circles,
+            show_cluster_numbers=args.show_cluster_numbers,
         )
     elif args.frame_by_frame:
         frame_by_frame_multicellular(
@@ -1714,6 +2025,8 @@ def main() -> None:
             arrow_gain=args.arrow_gain,
             follow_cells=args.follow_cells,
             show_path=args.show_path,
+            show_cluster_circles=args.show_cluster_circles,
+            show_cluster_numbers=args.show_cluster_numbers,
         )
     else:
         plot_multicellular(
@@ -1732,6 +2045,8 @@ def main() -> None:
             arrow_scale=args.arrow_scale,
             arrow_gain=args.arrow_gain,
             show_path=args.show_path,
+            show_cluster_circles=args.show_cluster_circles,
+            show_cluster_numbers=args.show_cluster_numbers,
         )
         print(f"Plotted up to {args.max_simulations} multicellular simulations.")
         print(f"Saved figure to: {args.output}")

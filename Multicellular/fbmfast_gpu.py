@@ -1,52 +1,54 @@
 import cupy as cp
+from functools import lru_cache
 
+@lru_cache(maxsize=None)
 def _fbm_spectral_weights(n, h):
     """
-    Calculates the eigenvalues of the circulant embedding using FFT.
-    From O(n^3) to O(n log n) in comparison to the Cholesky decomposition.
+    Eigenvalues (sqrt) of the circulant embedding of the fGn covariance,
+    computed with one FFT -> O(n log n). Memoized on (n, h).
     """
-    # Embed the covariance matrix into a circulant matrix of size 2m
     m = n - 1
-    r = cp.zeros(2*m)
-
-    # First row of the autocovariance matrix for fractional Gaussian noise
-    indices = cp.arange(m + 1, dtype=float)
+    r = cp.zeros(2 * m, dtype=cp.float64)
+ 
+    idx = cp.arange(m + 1, dtype=cp.float64)
     # gamma(k) = 0.5 * (|k-1|^(2H) - 2|k|^(2H) + |k+1|^(2H))
     phi = 0.5 * (
-        cp.abs(indices - 1.0) ** (2.0 * h)
-        - 2.0 * (indices ** (2.0 * h))
-        + cp.abs(indices + 1.0) ** (2.0 * h)
+        cp.abs(idx - 1.0) ** (2.0 * h)
+        - 2.0 * (idx ** (2.0 * h))
+        + cp.abs(idx + 1.0) ** (2.0 * h)
     )
-
-    # Build the first row of the circulant matrix
+ 
     r[:m + 1] = phi
-    r[m + 1:] = phi[m-1:0:-1]
-
-    # Compute the eigenvalues using FFT
+    r[m + 1:] = phi[m - 1:0:-1]
+ 
     eigenvalues = cp.fft.fft(r).real
-
-    # Clip eigenvalues to ensure non-negativity due to accuracy issues
-    return cp.sqrt(cp.maximum(eigenvalues, 0))
-
-def fbm_batch(n, h, dt, num_sims):
-    """Generates a 2D array of fBm noise: shape (num_sims, n)"""
+    return cp.sqrt(cp.maximum(eigenvalues, 0.0))
+ 
+ 
+def fgn_increments(n, h, dt, n_cells, dtype=cp.float64):
+    """
+    Scaled fractional Gaussian increments of shape (n_cells, n), with a
+    leading zero at t=0 so out[:, t] is the increment consumed at step t.
+    Returns the increments directly (no fBm cumsum + diff round-trip) and
+    uses real/imag independence to halve RNG and FFT work.
+    """
+    out = cp.zeros((n_cells, n), dtype=dtype)
     if n < 2:
-        return cp.zeros((num_sims, n))
-
+        return out
+ 
     weights = _fbm_spectral_weights(n, float(h))
     m = n - 1
-
-    # Generate complex Gaussian samples for all simulations at once
-    # Shape: (num_sims, 2*m)
-    z = cp.random.randn(num_sims, 2*m) + 1j * cp.random.randn(num_sims, 2*m)
-
-    # Weights will be broadcasted across all simulations
-    fgn = cp.fft.ifft(weights * z, axis=1).real * cp.sqrt(2*m)
-
-    # Integrate fGn to get fBm
-    fbm_values = cp.zeros((num_sims, n))
-    fbm_values[:, 1:] = cp.cumsum(fgn[:, :n-1], axis=1)
-
-    # Scale
-    fbm_values *= dt ** float(h)
-    return fbm_values
+    n_pairs = (n_cells + 1) // 2
+ 
+    z = cp.random.randn(n_pairs, 2 * m) + 1j * cp.random.randn(n_pairs, 2 * m)
+    c = cp.fft.ifft(weights * z, axis=1) * cp.sqrt(2 * m)
+ 
+    paths = cp.concatenate([c.real[:, :m], c.imag[:, :m]], axis=0)[:n_cells]
+    out[:, 1:] = (paths * (dt ** float(h))).astype(dtype)
+    return out
+ 
+ 
+def fbm_batch(n, h, dt, n_cells, dtype=cp.float64):
+    """Cumulative fBm path (kept for backward compatibility). Prefer
+    fgn_increments() in the integrator."""
+    return cp.cumsum(fgn_increments(n, h, dt, n_cells, dtype=dtype), axis=1)
