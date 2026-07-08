@@ -49,6 +49,7 @@ class SimulationRecord:
     h2: str
     dr: str
     boundary: str
+    fcil: str
     cluster_size: np.ndarray | None = None
     n_clusters: np.ndarray | None = None
 
@@ -60,6 +61,7 @@ class ParameterFilters:
     h2: set[str] | None = None
     dr: set[str] | None = None
     boundary: set[str] | None = None
+    fcil: set[str] | None = None
     sim: set[int] | None = None
 
 
@@ -80,13 +82,13 @@ def _normalize_sim_filter(values: list[int] | None) -> set[int] | None:
     return {int(v) for v in values}
 
 
-def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str]:
+def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str, str]:
     sim_id = -1
-    alpha, h1, h2, dr, boundary = "?", "?", "?", "?", "?"
+    alpha, h1, h2, dr, boundary, fcil = "?", "?", "?", "?", "?", "?"
 
     path_text = str(npz_file)
     dir_match = re.search(
-        r"Alpha_([0-9_]+)/H1_([0-9_]+)_H2_([0-9_]+)/Dr_([0-9_]+)/Boundary_([A-Za-z]+)",
+        r"Alpha_([0-9_]+)/H1_([0-9_]+)_H2_([0-9_]+)/Dr_([0-9_]+)/Boundary_([A-Za-z]+)/fcil_([0-9_]+)",
         path_text.replace("\\", "/"),
     )
     if dir_match:
@@ -95,9 +97,10 @@ def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str]:
         h2 = dir_match.group(3).replace("_", ".")
         dr = dir_match.group(4).replace("_", ".")
         boundary = dir_match.group(5).lower()
+        fcil = dir_match.group(6).replace("_", ".")
 
     file_match = re.match(
-        r"Sim_([0-9]+)_Dr_([0-9_]+)_H1_([0-9_]+)_H2_([0-9_]+)_Alpha_([0-9_]+)(?:_Boundary_([A-Za-z]+))?\.npz$",
+        r"Sim_([0-9]+)_Dr_([0-9_]+)_H1_([0-9_]+)_H2_([0-9_]+)_Alpha_([0-9_]+)(?:_Boundary_([A-Za-z]+))?(?:_fcil_([0-9_]+))?\.npz$",
         npz_file.name,
     )
     if file_match:
@@ -108,8 +111,10 @@ def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str]:
         alpha = file_match.group(5).replace("_", ".")
         if file_match.group(6):
             boundary = file_match.group(6).lower()
+        if file_match.group(7):
+            fcil = file_match.group(7).replace("_", ".")
 
-    return sim_id, alpha, h1, h2, dr, boundary
+    return sim_id, alpha, h1, h2, dr, boundary, fcil
 
 
 def _matches_filters(
@@ -119,6 +124,7 @@ def _matches_filters(
     h2: str,
     dr: str,
     boundary: str,
+    fcil: str,
     filters: ParameterFilters | None,
 ) -> bool:
     if filters is None:
@@ -134,6 +140,8 @@ def _matches_filters(
     if filters.dr is not None and dr not in filters.dr:
         return False
     if filters.boundary is not None and boundary not in filters.boundary:
+        return False
+    if filters.fcil is not None and fcil not in filters.fcil:
         return False
     return True
 
@@ -158,8 +166,8 @@ def find_multicellular_files(data_dir: Path, filters: ParameterFilters | None = 
     for file in files:
         if not _is_multicellular_file(file):
             continue
-        sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(file)
-        if _matches_filters(sim_id, alpha, h1, h2, dr, boundary, filters):
+        sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(file)
+        if _matches_filters(sim_id, alpha, h1, h2, dr, boundary, fcil, filters):
             selected.append(file)
     return selected
 
@@ -186,7 +194,7 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
         if n_clusters is not None and n_clusters.ndim != 1:
             n_clusters = None
 
-        sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(npz_file)
+        sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(npz_file)
         records.append(
             SimulationRecord(
                 file=npz_file,
@@ -203,6 +211,7 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
                 h2=h2,
                 dr=dr,
                 boundary=boundary,
+                fcil=fcil,
                 cluster_size=cluster_size,
                 n_clusters=n_clusters,
             )
@@ -214,7 +223,7 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
 
 
 def _record_label(rec: SimulationRecord) -> str:
-    return f"Sim={rec.sim_id} | alpha={rec.alpha}, H1={rec.h1}, H2={rec.h2}, Dr={rec.dr}, boundary={rec.boundary}"
+    return f"Sim={rec.sim_id} | alpha={rec.alpha}, H1={rec.h1}, H2={rec.h2}, Dr={rec.dr}, boundary={rec.boundary}, fcil={rec.fcil}"
 
 
 def _compute_intercellular_force(
@@ -244,15 +253,15 @@ def _compute_intercellular_force(
 
 
 def _build_summary(records: list[SimulationRecord]) -> str:
-    grouped: dict[tuple[str, str, str, str, str], int] = {}
+    grouped: dict[tuple[str, str, str, str, str, str], int] = {}
     for rec in records:
-        key = (rec.alpha, rec.h1, rec.h2, rec.dr, rec.boundary)
+        key = (rec.alpha, rec.h1, rec.h2, rec.dr, rec.boundary, rec.fcil)
         grouped[key] = grouped.get(key, 0) + 1
 
     lines = []
-    for alpha, h1, h2, dr, boundary in sorted(grouped.keys()):
+    for alpha, h1, h2, dr, boundary, fcil in sorted(grouped.keys()):
         lines.append(
-            f"alpha={alpha}, H1={h1}, H2={h2}, Dr={dr}, boundary={boundary}: n={grouped[(alpha, h1, h2, dr, boundary)]}"
+            f"alpha={alpha}, H1={h1}, H2={h2}, Dr={dr}, boundary={boundary}, fcil={fcil}: n={grouped[(alpha, h1, h2, dr, boundary, fcil)]}"
         )
     return "\n".join(lines)
 
@@ -1198,6 +1207,7 @@ class PlotterGUI:
         self.filter_h2_var = tk.StringVar(value="Any")
         self.filter_dr_var = tk.StringVar(value="Any")
         self.filter_boundary_var = tk.StringVar(value="Any")
+        self.filter_fcil_var = tk.StringVar(value="Any")
         self.filter_sim_var = tk.StringVar(value="Any")
         self.status_var = tk.StringVar(value="No DATA folder loaded.")
         self.arrow_scale_var = tk.StringVar(value="1.0")
@@ -1301,12 +1311,16 @@ class PlotterGUI:
         self.boundary_combo = ttk.Combobox(frame_filters, textvariable=self.filter_boundary_var, state="readonly", width=20)
         self.boundary_combo.grid(row=5, column=1, sticky="w", padx=4, pady=2)
 
-        tk.Label(frame_filters, text="sim id").grid(row=6, column=0, sticky="w", padx=4, pady=2)
-        self.sim_combo = ttk.Combobox(frame_filters, textvariable=self.filter_sim_var, state="readonly", width=20)
-        self.sim_combo.grid(row=6, column=1, sticky="w", padx=4, pady=2)
+        tk.Label(frame_filters, text="fcil").grid(row=6, column=0, sticky="w", padx=4, pady=2)
+        self.fcil_combo = ttk.Combobox(frame_filters, textvariable=self.filter_fcil_var, state="readonly", width=20)
+        self.fcil_combo.grid(row=6, column=1, sticky="w", padx=4, pady=2)
 
-        tk.Button(frame_filters, text="Apply Filters", command=self._apply_parameter_filters).grid(row=7, column=0, padx=4, pady=4, sticky="w")
-        tk.Button(frame_filters, text="Reset", command=self._reset_filters).grid(row=7, column=1, padx=4, pady=4, sticky="w")
+        tk.Label(frame_filters, text="sim id").grid(row=7, column=0, sticky="w", padx=4, pady=2)
+        self.sim_combo = ttk.Combobox(frame_filters, textvariable=self.filter_sim_var, state="readonly", width=20)
+        self.sim_combo.grid(row=7, column=1, sticky="w", padx=4, pady=2)
+
+        tk.Button(frame_filters, text="Apply Filters", command=self._apply_parameter_filters).grid(row=8, column=0, padx=4, pady=4, sticky="w")
+        tk.Button(frame_filters, text="Reset", command=self._reset_filters).grid(row=8, column=1, padx=4, pady=4, sticky="w")
 
         frame_params = tk.LabelFrame(self.plot_tab, text="Plot Parameters")
         frame_params.grid(row=2, column=0, sticky="ew", padx=8, pady=6)
@@ -1596,7 +1610,7 @@ class PlotterGUI:
             self.selected_files = [Path(p) for p in files]
             self.all_metadata = []
             for p in self.selected_files:
-                sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(p)
+                sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(p)
                 self.all_metadata.append(
                     {
                         "file": p,
@@ -1606,6 +1620,7 @@ class PlotterGUI:
                         "h2": h2,
                         "dr": dr,
                         "boundary": boundary,
+                        "fcil": fcil,
                     }
                 )
             self._populate_filter_options()
@@ -1620,7 +1635,7 @@ class PlotterGUI:
         npz_files = find_multicellular_files(data_dir)
         self.all_metadata = []
         for p in npz_files:
-            sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(p)
+            sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(p)
             self.all_metadata.append(
                 {
                     "file": p,
@@ -1630,6 +1645,7 @@ class PlotterGUI:
                     "h2": h2,
                     "dr": dr,
                     "boundary": boundary,
+                    "fcil": fcil,
                 }
             )
 
@@ -1644,6 +1660,7 @@ class PlotterGUI:
         h2s: list[str],
         drs: list[str],
         boundaries: list[str],
+        fcils: list[str],
         sims: list[str],
     ) -> None:
         self.alpha_combo["values"] = ["Any"] + alphas
@@ -1651,6 +1668,7 @@ class PlotterGUI:
         self.h2_combo["values"] = ["Any"] + h2s
         self.dr_combo["values"] = ["Any"] + drs
         self.boundary_combo["values"] = ["Any"] + boundaries
+        self.fcil_combo["values"] = ["Any"] + fcils
         self.sim_combo["values"] = ["Any"] + sims
 
         if self.filter_alpha_var.get() not in self.alpha_combo["values"]:
@@ -1663,6 +1681,8 @@ class PlotterGUI:
             self.filter_dr_var.set("Any")
         if self.filter_boundary_var.get() not in self.boundary_combo["values"]:
             self.filter_boundary_var.set("Any")
+        if self.filter_fcil_var.get() not in self.fcil_combo["values"]:
+            self.filter_fcil_var.set("Any")
         if self.filter_sim_var.get() not in self.sim_combo["values"]:
             self.filter_sim_var.set("Any")
 
@@ -1672,12 +1692,13 @@ class PlotterGUI:
         h2s = sorted({str(m["h2"]) for m in self.all_metadata})
         drs = sorted({str(m["dr"]) for m in self.all_metadata})
         boundaries = sorted({str(m["boundary"]) for m in self.all_metadata})
+        fcils = sorted({str(m["fcil"]) for m in self.all_metadata})
         sims = sorted({str(m["sim_id"]) for m in self.all_metadata}, key=lambda v: int(v) if v.lstrip("-").isdigit() else 999999)
-        self._set_filter_values(alphas, h1s, h2s, drs, boundaries, sims)
+        self._set_filter_values(alphas, h1s, h2s, drs, boundaries, fcils, sims)
 
     def _metadata_label(self, m: dict[str, object]) -> str:
         return (
-            f"Sim={m['sim_id']} | alpha={m['alpha']}, H1={m['h1']}, H2={m['h2']}, Dr={m['dr']}, boundary={m['boundary']} | {m['file']}"
+            f"Sim={m['sim_id']} | alpha={m['alpha']}, H1={m['h1']}, H2={m['h2']}, Dr={m['dr']}, boundary={m['boundary']}, fcil={m['fcil']} | {m['file']}"
         )
 
     def _refresh_listbox(self) -> None:
@@ -1702,6 +1723,8 @@ class PlotterGUI:
                 continue
             if not self._match_exact_or_any(self.filter_boundary_var.get(), m["boundary"]):
                 continue
+            if not self._match_exact_or_any(self.filter_fcil_var.get(), m["fcil"]):
+                continue
             if not self._match_exact_or_any(self.filter_sim_var.get(), m["sim_id"]):
                 continue
 
@@ -1722,6 +1745,7 @@ class PlotterGUI:
         self.filter_h2_var.set("Any")
         self.filter_dr_var.set("Any")
         self.filter_boundary_var.set("Any")
+        self.filter_fcil_var.set("Any")
         self.filter_sim_var.set("Any")
         self._apply_parameter_filters()
 
@@ -1867,6 +1891,7 @@ def main() -> None:
     parser.add_argument("--h1", nargs="+", default=None, help="Filter H1 values (example: --h1 0.5).")
     parser.add_argument("--h2", nargs="+", default=None, help="Filter H2 values (example: --h2 0.75).")
     parser.add_argument("--dr", nargs="+", default=None, help="Filter Dr values (example: --dr 0.1).")
+    parser.add_argument("--fcil", nargs="+", default=None, help="Filter fcil values (example: --fcil 0 0.1).")
     parser.add_argument(
         "--boundary",
         nargs="+",
@@ -1958,6 +1983,7 @@ def main() -> None:
         h1=_normalize_filter_values(args.h1),
         h2=_normalize_filter_values(args.h2),
         dr=_normalize_filter_values(args.dr),
+        fcil=_normalize_filter_values(args.fcil),
         boundary=set(args.boundary) if args.boundary else None,
         sim=_normalize_sim_filter(args.sim),
     )
@@ -1966,8 +1992,8 @@ def main() -> None:
     if cli_files:
         npz_files = []
         for p in cli_files:
-            sim_id, alpha, h1, h2, dr, boundary = _parse_from_path(p)
-            if _is_multicellular_file(p) and _matches_filters(sim_id, alpha, h1, h2, dr, boundary, filters):
+            sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(p)
+            if _is_multicellular_file(p) and _matches_filters(sim_id, alpha, h1, h2, dr, boundary, fcil, filters):
                 npz_files.append(p)
     else:
         npz_files = find_multicellular_files(args.data_dir, filters=filters)
@@ -1975,7 +2001,7 @@ def main() -> None:
     if not npz_files:
         raise FileNotFoundError(
             "No multicellular trajectory NPZ files found for selected filters under "
-            f"{args.data_dir} (alpha={args.alpha}, H1={args.h1}, H2={args.h2}, Dr={args.dr}, boundary={args.boundary}, sim={args.sim})"
+            f"{args.data_dir} (alpha={args.alpha}, H1={args.h1}, H2={args.h2}, Dr={args.dr}, fcil={args.fcil}, boundary={args.boundary}, sim={args.sim})"
         )
 
     show_motor, show_noise, show_intercellular = _resolve_arrow_visibility(
