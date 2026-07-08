@@ -50,6 +50,7 @@ class SimulationRecord:
     dr: str
     boundary: str
     fcil: str
+    start: str
     cluster_size: np.ndarray | None = None
     n_clusters: np.ndarray | None = None
 
@@ -62,6 +63,7 @@ class ParameterFilters:
     dr: set[str] | None = None
     boundary: set[str] | None = None
     fcil: set[str] | None = None
+    start: set[str] | None = None
     sim: set[int] | None = None
 
 
@@ -82,13 +84,13 @@ def _normalize_sim_filter(values: list[int] | None) -> set[int] | None:
     return {int(v) for v in values}
 
 
-def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str, str]:
+def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str, str, str]:
     sim_id = -1
-    alpha, h1, h2, dr, boundary, fcil = "?", "?", "?", "?", "?", "?"
+    alpha, h1, h2, dr, boundary, fcil, start = "?", "?", "?", "?", "?", "?", "?"
 
     path_text = str(npz_file)
     dir_match = re.search(
-        r"Alpha_([0-9_]+)/H1_([0-9_]+)_H2_([0-9_]+)/Dr_([0-9_]+)/Boundary_([A-Za-z]+)/fcil_([0-9_]+)",
+        r"Alpha_([0-9_]+)/H1_([0-9_]+)_H2_([0-9_]+)/Dr_([0-9_]+)/Boundary_([A-Za-z]+)/fcil_([0-9_]+)/Start_([0-9_]+)",
         path_text.replace("\\", "/"),
     )
     if dir_match:
@@ -98,9 +100,10 @@ def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str, str]
         dr = dir_match.group(4).replace("_", ".")
         boundary = dir_match.group(5).lower()
         fcil = dir_match.group(6).replace("_", ".")
+        start = dir_match.group(7).replace("_", ".")
 
     file_match = re.match(
-        r"Sim_([0-9]+)_Dr_([0-9_]+)_H1_([0-9_]+)_H2_([0-9_]+)_Alpha_([0-9_]+)(?:_Boundary_([A-Za-z]+))?(?:_fcil_([0-9_]+))?\.npz$",
+        r"Sim_([0-9]+)_Dr_([0-9_]+)_H1_([0-9_]+)_H2_([0-9_]+)_Alpha_([0-9_]+)(?:_Boundary_([A-Za-z]+))?(?:_fcil_([0-9_]+))?(?:_Start([0-9_]+))?\.npz$",
         npz_file.name,
     )
     if file_match:
@@ -113,8 +116,10 @@ def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str, str]
             boundary = file_match.group(6).lower()
         if file_match.group(7):
             fcil = file_match.group(7).replace("_", ".")
+        if file_match.group(8):
+            start = file_match.group(8).replace("_", ".")
 
-    return sim_id, alpha, h1, h2, dr, boundary, fcil
+    return sim_id, alpha, h1, h2, dr, boundary, fcil, start
 
 
 def _matches_filters(
@@ -125,6 +130,7 @@ def _matches_filters(
     dr: str,
     boundary: str,
     fcil: str,
+    start: str,
     filters: ParameterFilters | None,
 ) -> bool:
     if filters is None:
@@ -142,6 +148,8 @@ def _matches_filters(
     if filters.boundary is not None and boundary not in filters.boundary:
         return False
     if filters.fcil is not None and fcil not in filters.fcil:
+        return False
+    if filters.start is not None and start not in filters.start:
         return False
     return True
 
@@ -166,8 +174,8 @@ def find_multicellular_files(data_dir: Path, filters: ParameterFilters | None = 
     for file in files:
         if not _is_multicellular_file(file):
             continue
-        sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(file)
-        if _matches_filters(sim_id, alpha, h1, h2, dr, boundary, fcil, filters):
+        sim_id, alpha, h1, h2, dr, boundary, fcil, start = _parse_from_path(file)
+        if _matches_filters(sim_id, alpha, h1, h2, dr, boundary, fcil, start, filters):
             selected.append(file)
     return selected
 
@@ -194,7 +202,7 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
         if n_clusters is not None and n_clusters.ndim != 1:
             n_clusters = None
 
-        sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(npz_file)
+        sim_id, alpha, h1, h2, dr, boundary, fcil, start = _parse_from_path(npz_file)
         records.append(
             SimulationRecord(
                 file=npz_file,
@@ -212,6 +220,7 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
                 dr=dr,
                 boundary=boundary,
                 fcil=fcil,
+                start=start,
                 cluster_size=cluster_size,
                 n_clusters=n_clusters,
             )
@@ -223,7 +232,7 @@ def _load_records(npz_files: list[Path], max_simulations: int | None = None) -> 
 
 
 def _record_label(rec: SimulationRecord) -> str:
-    return f"Sim={rec.sim_id} | alpha={rec.alpha}, H1={rec.h1}, H2={rec.h2}, Dr={rec.dr}, boundary={rec.boundary}, fcil={rec.fcil}"
+    return f"Sim={rec.sim_id} | alpha={rec.alpha}, H1={rec.h1}, H2={rec.h2}, Dr={rec.dr}, boundary={rec.boundary}, fcil={rec.fcil}, Start={rec.start}"
 
 
 def _compute_intercellular_force(
@@ -455,6 +464,100 @@ def _add_overlay_artists(
     return artists
 
 
+def _create_cluster_overlay_slots(
+    ax: plt.Axes,
+    records: list[SimulationRecord],
+) -> dict[Path, list[tuple[Circle, object]]]:
+    slots: dict[Path, list[tuple[Circle, object]]] = {}
+    for rec in records:
+        record_slots: list[tuple[Circle, object]] = []
+        for _ in range(rec.x.shape[0]):
+            ring = Circle(
+                (0.0, 0.0),
+                radius=1.0,
+                facecolor="none",
+                edgecolor="none",
+                linestyle="--",
+                linewidth=1.6,
+                alpha=0.0,
+                visible=False,
+            )
+            ax.add_patch(ring)
+            text = ax.text(
+                0.0,
+                0.0,
+                "",
+                color="black",
+                fontsize=9,
+                fontweight="bold",
+                ha="center",
+                va="center",
+                bbox={"boxstyle": "round,pad=0.18", "fc": "white", "ec": "none", "alpha": 0.0},
+                visible=False,
+            )
+            record_slots.append((ring, text))
+        slots[rec.file] = record_slots
+    return slots
+
+
+def _update_cluster_overlay_slots(
+    record_slots: list[tuple[Circle, object]],
+    components: list[np.ndarray],
+    x_curr: np.ndarray,
+    y_curr: np.ndarray,
+    cell_radius: float,
+    color: str,
+    label_prefix: str,
+    show_circle: bool,
+    show_number: bool,
+) -> list[object]:
+    artists: list[object] = []
+
+    for slot_idx, (ring, text) in enumerate(record_slots):
+        if slot_idx >= len(components):
+            ring.set_visible(False)
+            text.set_visible(False)
+            continue
+
+        component = components[slot_idx]
+        if component.size == 0:
+            ring.set_visible(False)
+            text.set_visible(False)
+            continue
+
+        xs = x_curr[component]
+        ys = y_curr[component]
+        center_x = float(np.mean(xs))
+        center_y = float(np.mean(ys))
+        spread = float(np.max(np.sqrt((xs - center_x) ** 2 + (ys - center_y) ** 2))) if component.size > 1 else 0.0
+        overlay_radius = max(cell_radius * 0.9, spread + cell_radius * 0.6)
+
+        if show_circle:
+            ring.center = (center_x, center_y)
+            ring.radius = overlay_radius
+            ring.set_visible(True)
+            ring.set_facecolor("none")
+            ring.set_edgecolor(color)
+            ring.set_linestyle("--")
+            ring.set_linewidth(1.6)
+            ring.set_alpha(0.8)
+            artists.append(ring)
+        else:
+            ring.set_visible(False)
+
+        if show_number:
+            text.set_position((center_x, center_y))
+            text.set_text(f"{label_prefix}{component.size}")
+            text.set_color(color)
+            text.set_visible(True)
+            text.set_bbox({"boxstyle": "round,pad=0.18", "fc": "white", "ec": color, "alpha": 0.85})
+            artists.append(text)
+        else:
+            text.set_visible(False)
+
+    return artists
+
+
 def _resolve_arrow_visibility(
     motor: bool | None,
     noise: bool | None,
@@ -674,12 +777,11 @@ def animate_multicellular(
     motor_quivers = []
     noise_quivers = []
     inter_quivers = []
-    cluster_overlay_artists: list[object] = []
+    cluster_overlay_slots = _create_cluster_overlay_slots(ax, records)
 
     for rec in records:
         color = colors[rec.file]
         n_cells = rec.x.shape[0]
-        initial_cluster_sizes = _cluster_sizes_for_record(rec, 0, cell_radius)
 
         for cell_id in range(n_cells):
             (line,) = ax.plot([], [], linewidth=1.0, alpha=0.6, color=color)
@@ -778,21 +880,20 @@ def animate_multicellular(
         for marker, rec, cell_id in cell_markers:
             marker.center = (rec.x[cell_id, 0], rec.y[cell_id, 0])
             artists.append(marker)
-        cluster_overlay_artists.clear()
         for rec in records:
-                cluster_overlay_artists.extend(
-                    _add_overlay_artists(
-                        ax,
-                        rec.x[:, 0],
-                        rec.y[:, 0],
-                        cell_radius,
-                        colors[rec.file],
-                        "n=",
-                        show_circle=show_cluster_circles,
-                        show_number=show_cluster_numbers,
-                    )
+            artists.extend(
+                _update_cluster_overlay_slots(
+                    cluster_overlay_slots[rec.file],
+                    _cluster_components_from_positions(rec.x[:, 0], rec.y[:, 0], cell_radius),
+                    rec.x[:, 0],
+                    rec.y[:, 0],
+                    cell_radius,
+                    colors[rec.file],
+                    "n=",
+                    show_circle=show_cluster_circles,
+                    show_number=show_cluster_numbers,
                 )
-        artists.extend(cluster_overlay_artists)
+            )
         time_text.set_text("")
         artists.append(time_text)
         return artists
@@ -800,15 +901,6 @@ def animate_multicellular(
     def _update(frame_idx: int):
         k = frame_indices[frame_idx]
         artists: list[object] = []
-        cluster_sizes_by_record = [_cluster_sizes_for_record(rec, k, cell_radius) for rec in records]
-
-        for artist in cluster_overlay_artists:
-            if hasattr(artist, "remove"):
-                try:
-                    artist.remove()
-                except ValueError:
-                    pass
-        cluster_overlay_artists.clear()
 
         if follow_cells:
             x_now = np.concatenate([rec.x[:, k] for rec in records])
@@ -831,7 +923,6 @@ def animate_multicellular(
                 artists.append(line)
 
         for marker, rec, cell_id in cell_markers:
-            cluster_sizes = cluster_sizes_by_record[record_index[id(rec)]]
             marker.center = (rec.x[cell_id, k], rec.y[cell_id, k])
             marker.radius = cell_radius
             artists.append(marker)
@@ -874,9 +965,10 @@ def animate_multicellular(
         artists.append(time_text)
 
         for rec in records:
-            cluster_overlay_artists.extend(
-                _add_overlay_artists(
-                    ax,
+            artists.extend(
+                _update_cluster_overlay_slots(
+                    cluster_overlay_slots[rec.file],
+                    _cluster_components_from_positions(rec.x[:, k], rec.y[:, k], cell_radius),
                     rec.x[:, k],
                     rec.y[:, k],
                     cell_radius,
@@ -886,7 +978,6 @@ def animate_multicellular(
                     show_number=show_cluster_numbers,
                 )
             )
-        artists.extend(cluster_overlay_artists)
         return artists
 
     anim = animation.FuncAnimation(
@@ -957,12 +1048,11 @@ def frame_by_frame_multicellular(
     motor_quivers = []
     noise_quivers = []
     inter_quivers = []
-    cluster_overlay_artists: list[object] = []
+    cluster_overlay_slots = _create_cluster_overlay_slots(ax, records)
 
     for rec in records:
         color = colors[rec.file]
         n_cells = rec.x.shape[0]
-        initial_cluster_sizes = _cluster_sizes_for_record(rec, 0, cell_radius)
 
         for cell_id in range(n_cells):
             (line,) = ax.plot([], [], linewidth=1.0, alpha=0.6, color=color)
@@ -1066,15 +1156,6 @@ def frame_by_frame_multicellular(
     state = {"k": 0}
 
     def _render_frame(k: int) -> None:
-        cluster_sizes_by_record = [_cluster_sizes_for_record(rec, k, cell_radius) for rec in records]
-        for artist in cluster_overlay_artists:
-            if hasattr(artist, "remove"):
-                try:
-                    artist.remove()
-                except ValueError:
-                    pass
-        cluster_overlay_artists.clear()
-
         if follow_cells:
             x_now = np.concatenate([rec.x[:, k] for rec in records])
             y_now = np.concatenate([rec.y[:, k] for rec in records])
@@ -1094,7 +1175,6 @@ def frame_by_frame_multicellular(
                 line.set_data(rec.x[cell_id, : k + 1], rec.y[cell_id, : k + 1])
 
         for marker, rec, cell_id in cell_markers:
-            cluster_sizes = cluster_sizes_by_record[record_index[id(rec)]]
             marker.center = (rec.x[cell_id, k], rec.y[cell_id, k])
             marker.radius = cell_radius
 
@@ -1130,18 +1210,17 @@ def frame_by_frame_multicellular(
                 inter_quivers[rec_idx].set_UVC(np.zeros(rec.x.shape[0]), np.zeros(rec.x.shape[0]))
 
         for rec in records:
-                cluster_overlay_artists.extend(
-                    _add_overlay_artists(
-                        ax,
-                        rec.x[:, k],
-                        rec.y[:, k],
-                        cell_radius,
-                        colors[rec.file],
-                        "n=",
-                        show_circle=show_cluster_circles,
-                        show_number=show_cluster_numbers,
-                    )
-                )
+            _update_cluster_overlay_slots(
+                cluster_overlay_slots[rec.file],
+                _cluster_components_from_positions(rec.x[:, k], rec.y[:, k], cell_radius),
+                rec.x[:, k],
+                rec.y[:, k],
+                cell_radius,
+                colors[rec.file],
+                "n=",
+                show_circle=show_cluster_circles,
+                show_number=show_cluster_numbers,
+            )
 
         time_text.set_text(f"Frame {k}/{n_steps - 1}")
         fig.canvas.draw_idle()
@@ -1208,6 +1287,7 @@ class PlotterGUI:
         self.filter_dr_var = tk.StringVar(value="Any")
         self.filter_boundary_var = tk.StringVar(value="Any")
         self.filter_fcil_var = tk.StringVar(value="Any")
+        self.filter_start_var = tk.StringVar(value="Any")
         self.filter_sim_var = tk.StringVar(value="Any")
         self.status_var = tk.StringVar(value="No DATA folder loaded.")
         self.arrow_scale_var = tk.StringVar(value="1.0")
@@ -1315,12 +1395,16 @@ class PlotterGUI:
         self.fcil_combo = ttk.Combobox(frame_filters, textvariable=self.filter_fcil_var, state="readonly", width=20)
         self.fcil_combo.grid(row=6, column=1, sticky="w", padx=4, pady=2)
 
-        tk.Label(frame_filters, text="sim id").grid(row=7, column=0, sticky="w", padx=4, pady=2)
-        self.sim_combo = ttk.Combobox(frame_filters, textvariable=self.filter_sim_var, state="readonly", width=20)
-        self.sim_combo.grid(row=7, column=1, sticky="w", padx=4, pady=2)
+        tk.Label(frame_filters, text="Start").grid(row=7, column=0, sticky="w", padx=4, pady=2)
+        self.start_combo = ttk.Combobox(frame_filters, textvariable=self.filter_start_var, state="readonly", width=20)
+        self.start_combo.grid(row=7, column=1, sticky="w", padx=4, pady=2)
 
-        tk.Button(frame_filters, text="Apply Filters", command=self._apply_parameter_filters).grid(row=8, column=0, padx=4, pady=4, sticky="w")
-        tk.Button(frame_filters, text="Reset", command=self._reset_filters).grid(row=8, column=1, padx=4, pady=4, sticky="w")
+        tk.Label(frame_filters, text="sim id").grid(row=8, column=0, sticky="w", padx=4, pady=2)
+        self.sim_combo = ttk.Combobox(frame_filters, textvariable=self.filter_sim_var, state="readonly", width=20)
+        self.sim_combo.grid(row=8, column=1, sticky="w", padx=4, pady=2)
+
+        tk.Button(frame_filters, text="Apply Filters", command=self._apply_parameter_filters).grid(row=9, column=0, padx=4, pady=4, sticky="w")
+        tk.Button(frame_filters, text="Reset", command=self._reset_filters).grid(row=9, column=1, padx=4, pady=4, sticky="w")
 
         frame_params = tk.LabelFrame(self.plot_tab, text="Plot Parameters")
         frame_params.grid(row=2, column=0, sticky="ew", padx=8, pady=6)
@@ -1610,7 +1694,7 @@ class PlotterGUI:
             self.selected_files = [Path(p) for p in files]
             self.all_metadata = []
             for p in self.selected_files:
-                sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(p)
+                sim_id, alpha, h1, h2, dr, boundary, fcil, start = _parse_from_path(p)
                 self.all_metadata.append(
                     {
                         "file": p,
@@ -1621,6 +1705,7 @@ class PlotterGUI:
                         "dr": dr,
                         "boundary": boundary,
                         "fcil": fcil,
+                        "start": start,
                     }
                 )
             self._populate_filter_options()
@@ -1635,7 +1720,7 @@ class PlotterGUI:
         npz_files = find_multicellular_files(data_dir)
         self.all_metadata = []
         for p in npz_files:
-            sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(p)
+            sim_id, alpha, h1, h2, dr, boundary, fcil, start = _parse_from_path(p)
             self.all_metadata.append(
                 {
                     "file": p,
@@ -1646,6 +1731,7 @@ class PlotterGUI:
                     "dr": dr,
                     "boundary": boundary,
                     "fcil": fcil,
+                    "start": start,
                 }
             )
 
@@ -1661,6 +1747,7 @@ class PlotterGUI:
         drs: list[str],
         boundaries: list[str],
         fcils: list[str],
+        starts: list[str],
         sims: list[str],
     ) -> None:
         self.alpha_combo["values"] = ["Any"] + alphas
@@ -1669,6 +1756,7 @@ class PlotterGUI:
         self.dr_combo["values"] = ["Any"] + drs
         self.boundary_combo["values"] = ["Any"] + boundaries
         self.fcil_combo["values"] = ["Any"] + fcils
+        self.start_combo["values"] = ["Any"] + starts
         self.sim_combo["values"] = ["Any"] + sims
 
         if self.filter_alpha_var.get() not in self.alpha_combo["values"]:
@@ -1683,6 +1771,8 @@ class PlotterGUI:
             self.filter_boundary_var.set("Any")
         if self.filter_fcil_var.get() not in self.fcil_combo["values"]:
             self.filter_fcil_var.set("Any")
+        if self.filter_start_var.get() not in self.start_combo["values"]:
+            self.filter_start_var.set("Any")
         if self.filter_sim_var.get() not in self.sim_combo["values"]:
             self.filter_sim_var.set("Any")
 
@@ -1693,12 +1783,13 @@ class PlotterGUI:
         drs = sorted({str(m["dr"]) for m in self.all_metadata})
         boundaries = sorted({str(m["boundary"]) for m in self.all_metadata})
         fcils = sorted({str(m["fcil"]) for m in self.all_metadata})
+        starts = sorted({str(m["start"]) for m in self.all_metadata})
         sims = sorted({str(m["sim_id"]) for m in self.all_metadata}, key=lambda v: int(v) if v.lstrip("-").isdigit() else 999999)
-        self._set_filter_values(alphas, h1s, h2s, drs, boundaries, fcils, sims)
+        self._set_filter_values(alphas, h1s, h2s, drs, boundaries, fcils, starts, sims)
 
     def _metadata_label(self, m: dict[str, object]) -> str:
         return (
-            f"Sim={m['sim_id']} | alpha={m['alpha']}, H1={m['h1']}, H2={m['h2']}, Dr={m['dr']}, boundary={m['boundary']}, fcil={m['fcil']} | {m['file']}"
+            f"Sim={m['sim_id']} | alpha={m['alpha']}, H1={m['h1']}, H2={m['h2']}, Dr={m['dr']}, boundary={m['boundary']}, fcil={m['fcil']}, Start={m['start']} | {m['file']}"
         )
 
     def _refresh_listbox(self) -> None:
@@ -1725,6 +1816,8 @@ class PlotterGUI:
                 continue
             if not self._match_exact_or_any(self.filter_fcil_var.get(), m["fcil"]):
                 continue
+            if not self._match_exact_or_any(self.filter_start_var.get(), m["start"]):
+                continue
             if not self._match_exact_or_any(self.filter_sim_var.get(), m["sim_id"]):
                 continue
 
@@ -1746,6 +1839,7 @@ class PlotterGUI:
         self.filter_dr_var.set("Any")
         self.filter_boundary_var.set("Any")
         self.filter_fcil_var.set("Any")
+        self.filter_start_var.set("Any")
         self.filter_sim_var.set("Any")
         self._apply_parameter_filters()
 
@@ -1892,6 +1986,7 @@ def main() -> None:
     parser.add_argument("--h2", nargs="+", default=None, help="Filter H2 values (example: --h2 0.75).")
     parser.add_argument("--dr", nargs="+", default=None, help="Filter Dr values (example: --dr 0.1).")
     parser.add_argument("--fcil", nargs="+", default=None, help="Filter fcil values (example: --fcil 0 0.1).")
+    parser.add_argument("--start", nargs="+", default=None, help="Filter Start values (example: --start 0 0.5).")
     parser.add_argument(
         "--boundary",
         nargs="+",
@@ -1984,6 +2079,7 @@ def main() -> None:
         h2=_normalize_filter_values(args.h2),
         dr=_normalize_filter_values(args.dr),
         fcil=_normalize_filter_values(args.fcil),
+        start=_normalize_filter_values(args.start),
         boundary=set(args.boundary) if args.boundary else None,
         sim=_normalize_sim_filter(args.sim),
     )
@@ -1992,8 +2088,8 @@ def main() -> None:
     if cli_files:
         npz_files = []
         for p in cli_files:
-            sim_id, alpha, h1, h2, dr, boundary, fcil = _parse_from_path(p)
-            if _is_multicellular_file(p) and _matches_filters(sim_id, alpha, h1, h2, dr, boundary, fcil, filters):
+            sim_id, alpha, h1, h2, dr, boundary, fcil, start = _parse_from_path(p)
+            if _is_multicellular_file(p) and _matches_filters(sim_id, alpha, h1, h2, dr, boundary, fcil, start, filters):
                 npz_files.append(p)
     else:
         npz_files = find_multicellular_files(args.data_dir, filters=filters)
@@ -2001,7 +2097,7 @@ def main() -> None:
     if not npz_files:
         raise FileNotFoundError(
             "No multicellular trajectory NPZ files found for selected filters under "
-            f"{args.data_dir} (alpha={args.alpha}, H1={args.h1}, H2={args.h2}, Dr={args.dr}, fcil={args.fcil}, boundary={args.boundary}, sim={args.sim})"
+            f"{args.data_dir} (alpha={args.alpha}, H1={args.h1}, H2={args.h2}, Dr={args.dr}, fcil={args.fcil}, Start={args.start}, boundary={args.boundary}, sim={args.sim})"
         )
 
     show_motor, show_noise, show_intercellular = _resolve_arrow_visibility(
