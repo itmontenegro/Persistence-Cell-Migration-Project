@@ -1,261 +1,253 @@
+"""
+TRA (Total Relative Accuracy) heatmap for the TCN regressor.
+TRA = RelAcc(Dr) x RelAcc(H2), per (Dr, H2) parameter combo, in %.
+Assumes TCN_Base.py is in the same directory (imports DataManager, BaseTCNRegressor).
+"""
+
 import os
-import re
-import random
 import numpy as np
 import torch
-import torch.nn as nn
 import matplotlib.pyplot as plt
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.utils.rnn import pad_sequence
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from collections import defaultdict
 
-def seed_everything(seed=42): 
-    random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+from TCN_Base import DataManager, BaseTCNRegressor, seed_everything
 
-seed_everything(42)
-
-# --- TCN Architecture (Identical to training) ---
-class CausalResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, dilation, kernel_size=3, dropout=0.2):
-        super().__init__()
-        self.padding = (kernel_size - 1) * dilation
-        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, 
-                              dilation=dilation, padding=self.padding)
-        self.ln = nn.GroupNorm(1, out_channels) 
-        self.relu = nn.ReLU() 
-        self.dropout = nn.Dropout(dropout)
-        self.downsample = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else None
-
-    def forward(self, x):
-        residual = x
-        out = self.conv(x)
-        out = out[:, :, :-self.padding] 
-        out = self.ln(out)
-        out = self.relu(out)
-        out = self.dropout(out)
-        if self.downsample is not None:
-            residual = self.downsample(x)
-        return out + residual 
-
-class BaseTCNRegressor(nn.Module):
-    def __init__(self, input_size=7): 
-        super().__init__()
-        dilations = [1, 2, 4, 8, 16, 32]
-        channels = [64, 128, 128, 256, 256, 512]
-        
-        layers = []
-        curr_in = input_size
-        for d, c in zip(dilations, channels):
-            layers.append(CausalResidualBlock(curr_in, c, dilation=d))
-            curr_in = c
-            
-        self.encoder = nn.Sequential(*layers)
-        self.fc = nn.Linear(512, 2) 
-
-    def forward(self, x, lengths):
-        x = self.encoder(x.permute(0, 2, 1))
-        pooled = torch.mean(x, dim=2) 
-        return self.fc(pooled)
+CKPT_PATH = "base_tcn_7in.pth"
+DATA_DIR = "/Users/karan/Downloads/CellMigration_Project/DATA_TEST"  # <-- edit if needed--- definately needed
+EPS = 1e-6
 
 
-# --- Data Management (Identical to training to perfectly match scalers) ---
-class TrajectoryDataset(Dataset):  
-    def __init__(self, samples, input_scaler, target_scaler, file_cache):
-        self.samples = samples
-        self.input_scaler = input_scaler
-        self.target_scaler = target_scaler
-        self.file_cache = file_cache 
+def train_if_needed(model, loaders, device, ckpt_path=CKPT_PATH, max_epochs=200, patience=25):
+    """Train only if no checkpoint exists yet. Mirrors run_pipeline()'s training loop exactly."""
+    if os.path.exists(ckpt_path):
+        print(f"Found existing checkpoint '{ckpt_path}', skipping training.")
+        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        return model
 
-    def __len__(self): return len(self.samples)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10)
+    criterion = torch.nn.HuberLoss()
+    best_v, counter = float('inf'), 0
 
-    def __getitem__(self, idx):
-        path, traj_idx, dr, h2 = self.samples[idx]
-        
-        if path not in self.file_cache:
-            data = np.load(path)
-            x, y, theta = data['x_array'], data['y_array'], data['theta_array']
-            
-            dx = np.zeros_like(x)
-            dx[:, 1:] = x[:, 1:] - x[:, :-1]
-            dy = np.zeros_like(y)
-            dy[:, 1:] = y[:, 1:] - y[:, :-1]
-            
-            step_len = np.sqrt(dx**2 + dy**2)
-            cum_dist = np.cumsum(step_len, axis=1)
-            net_disp = np.sqrt(x**2 + y**2)
-            efficiency = net_disp / (cum_dist + 1e-6)
-            
-            inputs_raw = np.stack([dx, dy, step_len, efficiency], axis=-1)
-            B, T, F = inputs_raw.shape
-            inputs_scaled = self.input_scaler.transform(inputs_raw.reshape(-1, F)).reshape(B, T, F)
-            net_disp_normed = net_disp / (np.max(net_disp, axis=1, keepdims=True) + 1e-6)
-            
-            all_file_features = np.stack([
-                inputs_scaled[:, :, 0], inputs_scaled[:, :, 1], inputs_scaled[:, :, 2], 
-                inputs_scaled[:, :, 3], np.sin(theta), np.cos(theta), net_disp_normed
-            ], axis=-1)
-            self.file_cache[path] = all_file_features
+    for epoch in range(1, max_epochs + 1):
+        model.train()
+        t_loss, n_train = 0.0, 0
+        for x, y, lens in loaders['train']:
+            x, y, lens = x.to(device), y.to(device), lens.to(device)
+            optimizer.zero_grad()
+            p = model(x, lens)
+            loss = criterion(p, y)
+            loss.backward()
+            optimizer.step()
+            t_loss += loss.item() * x.size(0)
+            n_train += x.size(0)
 
-        feat = self.file_cache[path][traj_idx]
-        target_raw = np.array([[np.log10(dr + 1), h2]])
-        target_norm = self.target_scaler.transform(target_raw).flatten()
-        return torch.tensor(feat, dtype=torch.float32), torch.tensor(target_norm, dtype=torch.float32)
+        model.eval()
+        v_loss, n_val = 0.0, 0
+        with torch.no_grad():
+            for vx, vy, vlens in loaders['val']:
+                vx, vy, vlens = vx.to(device), vy.to(device), vlens.to(device)
+                v_loss += criterion(model(vx, vlens), vy).item() * vx.size(0)
+                n_val += vx.size(0)
 
-def collate_fn(batch):
-    seqs, targets = zip(*batch)
-    lengths = torch.tensor([len(s) for s in seqs])
-    return pad_sequence(seqs, batch_first=True), torch.stack(targets), lengths
+        avg_v = v_loss / n_val
+        scheduler.step(avg_v)
 
-class DataManager:
-    def __init__(self, base_path=".", batch_size=16): 
-        self.base_path = base_path
-        self.batch_size = batch_size
-        self.input_scaler = StandardScaler() 
-        self.target_scaler = StandardScaler()
-        self.files = []
-        self._load_files()
+        if epoch % 5 == 0:
+            print(f"Ep {epoch:03d} | Train: {t_loss/n_train:.4f} | Val: {avg_v:.4f}")
 
-    def _load_files(self):
-        print(f"Loading data from {self.base_path} to recreate scalers...")
-        all_npz = []
-        for root, dirs, files in os.walk(self.base_path):
-            for f in files:
-                if f.endswith('.npz'):
-                    all_npz.append(os.path.join(root, f))
-        for p in all_npz:
-            m = re.search(r"Batch_Dr_([\d_]+)_H1_([\d_]+)_H2_([\d_]+)_Alpha_([\d_]+)", os.path.basename(p))
-            if m:
-                vals = [float(x.replace('_', '.')) for x in m.groups()]
-                self.files.append((p, *vals))
+        if avg_v < best_v:
+            best_v, counter = avg_v, 0
+            torch.save(model.state_dict(), ckpt_path)
+        else:
+            counter += 1
+            if counter >= patience:
+                print(f"Early stop at epoch {epoch}")
+                break
 
-    def get_loaders(self):
-        train_samples, test_samples = [], []
-        all_targets = []
-        shared_cache = {} 
-        
-        for p, dr, h1, h2, alpha in self.files:
-            for i in range(350): train_samples.append((p, i, dr, h2))
-            for i in range(350, 450): test_samples.append((p, i, dr, h2))
-            
-            data = np.load(p)
-            x_train, y_train = data['x_array'][:350], data['y_array'][:350]
-            
-            dx = np.zeros_like(x_train)
-            dx[:, 1:] = x_train[:, 1:] - x_train[:, :-1]
-            dy = np.zeros_like(y_train)
-            dy[:, 1:] = y_train[:, 1:] - y_train[:, :-1]
-            
-            sl = np.sqrt(dx**2 + dy**2)
-            eff = np.sqrt(x_train**2 + y_train**2) / (np.cumsum(sl, axis=1) + 1e-6)
-            
-            inputs_raw = np.stack([dx, dy, sl, eff], axis=-1)
-            self.input_scaler.partial_fit(inputs_raw.reshape(-1, 4))
-            for _ in range(350): all_targets.append([np.log10(dr + 1), h2])
-                
-        self.target_scaler.fit(all_targets)
-        loader_args = {'batch_size': self.batch_size, 'collate_fn': collate_fn}
-        
-        # We only need the test loader for evaluation
-        return {
-            'test': DataLoader(TrajectoryDataset(test_samples, self.input_scaler, self.target_scaler, shared_cache), **loader_args),
-            'manager': self
-        }
+    model.load_state_dict(torch.load(ckpt_path, map_location=device))
+    return model
 
-# --- Evaluation & Plotting Logic ---
-def evaluate_and_plot():
-    device = torch.device("mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu"))
-    print(f"Using device: {device}")
-    
-    # 1. Initialize DataManager to perfectly recreate test dataset & scalers
-    data_gen = DataManager(base_path="/Users/karan/Downloads/CellMigration_Project/DATA_TEST", batch_size=16)
-    loaders = data_gen.get_loaders()
-    
-    # 2. Load the Model
-    model = BaseTCNRegressor(input_size=7).to(device)
-    
-    weights_path = "base_tcn_7in.pth"
-    if not os.path.exists(weights_path):
-        print(f" Could not find {weights_path}! Make sure the script is in the same folder as your saved model.")
-        return
-        
-    model.load_state_dict(torch.load(weights_path, map_location=device))
+
+def compute_test_predictions(model, data_gen, loaders, device):
+    """
+    Run inference on the test set and return per-sample:
+    (dr_true, h2_true, dr_pred, h2_pred) in ORIGINAL (unscaled) units,
+    in the exact iteration order of loaders['test'] (shuffle=False -> matches test_samples order).
+    """
     model.eval()
-    print(" Model weights loaded successfully! Running inference on Test Set...")
-
-    # 3. Collect Predictions
     all_p_norm, all_y_norm = [], []
     with torch.no_grad():
         for tx, ty, tlen in loaders['test']:
             all_p_norm.append(model(tx.to(device), tlen.to(device)).cpu().numpy())
             all_y_norm.append(ty.numpy())
-    
-    # 4. Inverse Scale & Fix Dr
+
     p_final = data_gen.target_scaler.inverse_transform(np.concatenate(all_p_norm))
     y_final = data_gen.target_scaler.inverse_transform(np.concatenate(all_y_norm))
 
-    p_final[:, 0] = 10**(p_final[:, 0]) - 1 
-    y_final[:, 0] = 10**(y_final[:, 0]) - 1
 
-    # 5. Generate Graphs
-    param_names = ['Dr', 'H2']
-    for i, n in enumerate(param_names):
-        y_true = y_final[:, i]
-        y_pred = p_final[:, i]
-        
-        # Calculate Metrics
-        mae = mean_absolute_error(y_true, y_pred)
-        mse = mean_squared_error(y_true, y_pred)
-        r2 = r2_score(y_true, y_pred)
-        
-        print(f"\n--- {n} Metrics ---")
-        print(f"MAE: {mae:.6f} | MSE: {mse:.6f} | R²: {r2:.4f}")
+    p_final[:, 0] = 10 ** p_final[:, 0] - 1
+    y_final[:, 0] = 10 ** y_final[:, 0] - 1
 
-        # Sort based on Ground Truth values to create the step-line
-        sort_indices = np.argsort(y_true)
-        y_true_sorted = y_true[sort_indices]
-        y_pred_sorted = y_pred[sort_indices]
-        x_axis = np.arange(len(y_true_sorted))
+    return y_final, p_final  
 
-        # Setup the Matplotlib figure
-        plt.figure(figsize=(12, 7), dpi=300)
-        
-        # Ground Truth as a thick, continuous blue step-line
-        plt.plot(x_axis, y_true_sorted, label='Ground Truth (Simulation)', 
-                 color='#348ABD', linewidth=3.5, alpha=0.9, zorder=1)
-        
-        # Predictions as red scatter dots with black borders
-        plt.scatter(x_axis, y_pred_sorted, label='Base TCN Prediction', 
-                    color='#E24A33', edgecolors='black', s=25, zorder=2)
 
-        # Aesthetics
-        plt.title(f'Base TCN Performance: {n} Recovery', fontsize=18, fontweight='bold', pad=10)
-        plt.xlabel('Test Samples (Sorted)', fontsize=12)
-        plt.ylabel('Physical Units', fontsize=12)
-        
-        # Text Box
-        text_str = f"R² Score: {r2:.5f}\nMAE: {mae:.6f}\nMSE: {mse:.6f}"
-        props = dict(boxstyle='round,pad=0.4', facecolor='white', edgecolor='black', alpha=1.0)
-        plt.gca().text(0.04, 0.95, text_str, transform=plt.gca().transAxes, fontsize=14,
-                       verticalalignment='top', bbox=props)
+def build_accuracy_matrices(y_true, y_pred):
+    """
+    Computes:
+        Dr Relative Accuracy matrix
+        H2 Relative Accuracy matrix
+        TRA = DrAcc * H2Acc
 
-        # Grid and Legend
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.legend(loc='lower right', fontsize=12)
-        plt.tight_layout()
-        
-        # Save output
-        filename = f"Evaluation_{n}_Recovery.png"
-        plt.savefig(filename)
-        print(f"📉 Saved graph locally as: {filename}")
-        plt.close()
+    Returns:
+        dr_vals
+        h2_vals
+        dr_matrix
+        h2_matrix
+        tra_matrix
+    """
+
+    groups = defaultdict(list)
+
+    for (dr_t, h2_t), (dr_p, h2_p) in zip(y_true, y_pred):
+        key = (round(float(dr_t), 2), round(float(h2_t), 2))
+        groups[key].append((dr_t, h2_t, dr_p, h2_p))
+
+    dr_vals = sorted({k[0] for k in groups})
+    h2_vals = sorted({k[1] for k in groups})
+
+    dr_index = {v: i for i, v in enumerate(dr_vals)}
+    h2_index = {v: i for i, v in enumerate(h2_vals)}
+
+    dr_matrix = np.full((len(h2_vals), len(dr_vals)), np.nan)
+    h2_matrix = np.full((len(h2_vals), len(dr_vals)), np.nan)
+    tra_matrix = np.full((len(h2_vals), len(dr_vals)), np.nan)
+
+    for (dr, h2), samples in groups.items():
+
+        arr = np.array(samples)
+
+        dr_true = arr[:,0]
+        h2_true = arr[:,1]
+
+        dr_pred = arr[:,2]
+        h2_pred = arr[:,3]
+
+        dr_acc = 1 - np.abs(dr_pred-dr_true)/(np.abs(dr_true)+EPS)
+        h2_acc = 1 - np.abs(h2_pred-h2_true)/(np.abs(h2_true)+EPS)
+
+        dr_acc = np.clip(dr_acc,0,1).mean()
+        h2_acc = np.clip(h2_acc,0,1).mean()
+
+        i = h2_index[h2]
+        j = dr_index[dr]
+
+        dr_matrix[i,j] = dr_acc*100
+        h2_matrix[i,j] = h2_acc*100
+        tra_matrix[i,j] = dr_acc*h2_acc*100
+
+    return dr_vals, h2_vals, dr_matrix, h2_matrix, tra_matrix
+
+
+def plot_heatmap(matrix,
+                 dr_vals,
+                 h2_vals,
+                 title,
+                 colorbar_label,
+                 out_path,
+                 vmin=90,
+                 vmax=100):
+
+    fig, ax = plt.subplots(figsize=(16,10))
+
+    im = ax.imshow(
+        matrix,
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+        aspect="auto",
+        origin="lower",
+        interpolation="nearest"
+    )
+
+    ax.set_xticks(np.arange(len(dr_vals)))
+    ax.set_xticklabels(
+        [f"{v:.2f}" for v in dr_vals],
+        rotation=90,
+        fontsize=8
+    )
+
+    ax.set_yticks(np.arange(len(h2_vals)))
+    ax.set_yticklabels(
+        [f"{v:.2f}" for v in h2_vals],
+        fontsize=9
+    )
+
+    ax.set_xlabel(r"$Dr$", fontsize=14)
+    ax.set_ylabel(r"$H_2$", fontsize=14)
+
+    ax.set_title(title, fontsize=15)
+
+    cbar = fig.colorbar(im, ax=ax, pad=0.02)
+    cbar.set_label(colorbar_label, fontsize=12)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+
+def main():
+    seed_everything(42)
+    device = torch.device("mps" if torch.backends.mps.is_available()
+                           else ("cuda" if torch.cuda.is_available() else "cpu"))
+
+    data_gen = DataManager(base_path=DATA_DIR, batch_size=16)
+    loaders = data_gen.get_loaders()
+
+    model = BaseTCNRegressor(input_size=7).to(device)
+    model = train_if_needed(model, loaders, device)
+
+    y_true, y_pred = compute_test_predictions(model, data_gen, loaders, device)
+    dr_vals, h2_vals, dr_acc, h2_acc, tra = build_accuracy_matrices(
+    y_true,
+    y_pred
+)
+    print(f"Grid: {len(dr_vals)} Dr values x {len(h2_vals)} H2 values")
+    print(f"Dr Accuracy Range : {np.nanmin(dr_acc):.2f}% - {np.nanmax(dr_acc):.2f}%")
+    print(f"H2 Accuracy Range : {np.nanmin(h2_acc):.2f}% - {np.nanmax(h2_acc):.2f}%")
+    print(f"TRA Range         : {np.nanmin(tra):.2f}% - {np.nanmax(tra):.2f}%")
+    # Dr Accuracy Heatmap
+    plot_heatmap(
+    matrix=dr_acc,
+    dr_vals=dr_vals,
+    h2_vals=h2_vals,
+    title="TCN Matrix Evaluation (70_20_10) - Dr Task\nRelative Accuracy (Dr)",
+    colorbar_label="Relative Accuracy (Dr) %",
+    out_path="dr_accuracy_heatmap.png"
+)
+    # H2 Accuracy Heatmap
+    plot_heatmap(
+    matrix=h2_acc,
+    dr_vals=dr_vals,
+    h2_vals=h2_vals,
+    title="TCN Matrix Evaluation (70_20_10) - H₂ Task\nRelative Accuracy (H₂)",
+    colorbar_label="Relative Accuracy (H₂) %",
+    out_path="h2_accuracy_heatmap.png"
+)
+    # TRA Heatmap
+    plot_heatmap(
+    matrix=tra,
+    dr_vals=dr_vals,
+    h2_vals=h2_vals,
+    title="TCN Matrix Evaluation (70_20_10) - Joint Task\nTRA = Rel.Acc(H₂) × Rel.Acc(Dr)",
+    colorbar_label="Total Relative Accuracy (TRA) %",
+    out_path="tra_heatmap.png"
+)
+    print("\nSaved:")
+    print("  dr_accuracy_heatmap.png")
+    print("  h2_accuracy_heatmap.png")
+    print("  tra_heatmap.png")
+
 
 if __name__ == "__main__":
-    evaluate_and_plot()
+    main()
