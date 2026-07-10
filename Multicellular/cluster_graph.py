@@ -1,25 +1,144 @@
 from __future__ import annotations
 
+import argparse
 import sys
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 
+def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str, str, str]:
+	sim_id = -1
+	alpha, h1, h2, dr, boundary, fcil, start = "?", "?", "?", "?", "?", "?", "?"
 
-file_paths = [
-	Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_0_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-	Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_1_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-    Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_2_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-	Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_3_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-	Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_4_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-	Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_5_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-	Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_6_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-	Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_7_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-	Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_8_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-    Path("DATA/Alpha_0_25/H1_0_5_H2_0_99/Dr_0_1/Boundary_Periodic/Sim_9_Dr_0_1_H1_0_5_H2_0_99_Alpha_0_25_Boundary_Periodic.npz"),
-]
+	path_text = str(npz_file).replace("\\", "/")
+	dir_match = re.search(
+		r"Alpha_([0-9_]+)/H1_([0-9_]+)_H2_([0-9_]+)/Dr_([0-9_]+)/Boundary_([A-Za-z]+)/fcil_([0-9_]+)/Start_([A-Za-z0-9_]+)",
+		path_text,
+	)
+	if dir_match:
+		alpha = dir_match.group(1).replace("_", ".")
+		h1 = dir_match.group(2).replace("_", ".")
+		h2 = dir_match.group(3).replace("_", ".")
+		dr = dir_match.group(4).replace("_", ".")
+		boundary = dir_match.group(5).lower()
+		fcil = dir_match.group(6).replace("_", ".")
+		start = dir_match.group(7)
+
+	file_match = re.match(
+		r"Sim_([0-9]+)_Dr_([0-9_]+)_H1_([0-9_]+)_H2_([0-9_]+)_Alpha_([0-9_]+)(?:_Boundary_([A-Za-z]+))?(?:_fcil_([0-9_]+))?(?:_Start_([A-Za-z0-9_]+))?\.npz$",
+		npz_file.name,
+	)
+	if file_match:
+		sim_id = int(file_match.group(1))
+		dr = file_match.group(2).replace("_", ".")
+		h1 = file_match.group(3).replace("_", ".")
+		h2 = file_match.group(4).replace("_", ".")
+		alpha = file_match.group(5).replace("_", ".")
+		if file_match.group(6):
+			boundary = file_match.group(6).lower()
+		if file_match.group(7):
+			fcil = file_match.group(7).replace("_", ".")
+		if file_match.group(8):
+			start = file_match.group(8)
+
+	return sim_id, alpha, h1, h2, dr, boundary, fcil, start
+
+
+def _normalize_for_filename(value: str) -> str:
+	return value.replace(".", "_").replace(" ", "_")
+
+
+def _group_paths_by_arguments(selected_paths: list[Path]) -> list[tuple[tuple[str, str, str, str, str, str, str], list[Path]]]:
+	grouped: dict[tuple[str, str, str, str, str, str, str], list[Path]] = {}
+	for path in sorted(selected_paths):
+		_, alpha, h1, h2, dr, boundary, fcil, start = _parse_from_path(path)
+		key = (alpha, h1, h2, dr, boundary, fcil, start)
+		grouped.setdefault(key, []).append(path)
+	return sorted(grouped.items(), key=lambda item: item[0])
+
+
+def _discover_npz_files(data_root: Path) -> list[Path]:
+	if not data_root.exists():
+		raise FileNotFoundError(f"Data root not found: {data_root}")
+	return sorted(path for path in data_root.rglob("*.npz") if path.is_file())
+
+
+def _build_output_name(group_key: tuple[str, str, str, str, str, str, str], sim_count: int) -> str:
+	alpha, h1, h2, dr, boundary, fcil, start = group_key
+	parts = [
+		"cluster_summary",
+		f"H2_{_normalize_for_filename(h2)}",
+		f"f_cil_{_normalize_for_filename(fcil)}",
+		f"sims_{sim_count}",
+		f"boundary_{_normalize_for_filename(boundary)}",
+		f"start_{_normalize_for_filename(start)}",
+	]
+	return "_".join(parts) + ".png"
+
+
+def _render_cluster_summary(selected_paths: list[Path], output_path: Path) -> None:
+	time_series = []
+	clusters_gt2_series = []
+	max_cluster_series = []
+	avg_cluster_series = []
+
+	for path in selected_paths:
+		time_steps, clusters_gt2, max_cluster_size, avg_cluster_size = _load_single_simulation(path)
+		time_series.append(time_steps)
+		clusters_gt2_series.append(clusters_gt2)
+		max_cluster_series.append(max_cluster_size)
+		avg_cluster_series.append(avg_cluster_size)
+
+	aligned_clusters_gt2 = _align_series(clusters_gt2_series)
+	aligned_max_cluster = _align_series(max_cluster_series)
+	aligned_avg_cluster = _align_series(avg_cluster_series)
+	min_length = min(series.shape[0] for series in time_series)
+	time_steps = time_series[0][:min_length]
+
+	fig, axes = plt.subplots(3, 1, figsize=(11, 11), sharex=True)
+
+	_plot_mean_with_dispersion(
+		axes[0],
+		time_steps,
+		aligned_clusters_gt2,
+		"Time vs Number of Clusters with Size > 2",
+		"Number of clusters",
+		"tab:blue",
+	)
+
+	_plot_mean_with_dispersion(
+		axes[1],
+		time_steps,
+		aligned_max_cluster,
+		"Time vs Max Cluster Size",
+		"Max cluster size",
+		"tab:green",
+	)
+
+	_plot_mean_with_dispersion(
+		axes[2],
+		time_steps,
+		aligned_avg_cluster,
+		"Time vs Average Cluster Size",
+		"Average cluster size",
+		"tab:orange",
+		ytick_step=5,
+	)
+
+	axes[2].set_xlabel("Time step")
+
+	group_key = _parse_from_path(selected_paths[0])[1:]
+	alpha, h1, h2, dr, boundary, fcil, start = group_key
+	fig.suptitle(
+		f"Cluster summary over {len(selected_paths)} simulation(s) | H2={h2}, f_cil={fcil}, boundary={boundary}, start={start}"
+	)
+	fig.tight_layout()
+	fig.savefig(output_path, dpi=200, bbox_inches="tight")
+	plt.close(fig)
+	print(f"Saved figure to: {output_path}")
 
 
 def _count_clusters_larger_than_two(cluster_size_array: np.ndarray) -> np.ndarray:
@@ -120,75 +239,37 @@ def _plot_mean_with_dispersion(
 
 
 def main() -> None:
-	selected_paths = [Path(arg) for arg in sys.argv[1:]] if len(sys.argv) > 1 else file_paths
-	if not selected_paths:
-		raise ValueError("Provide at least one .npz file path.")
+	parser = argparse.ArgumentParser(description="Generate cluster summary plots for each simulation argument set.")
+	parser.add_argument("paths", nargs="*", help="Optional .npz files or directories to scan. If omitted, --data-root is scanned.")
+	parser.add_argument("--data-root", type=Path, default=Path(__file__).resolve().parent / "DATA", help="Root directory to scan for .npz files when no explicit paths are provided.")
+	parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent.parent / "graphs", help="Directory where plots are saved.")
+	args = parser.parse_args()
 
-	time_series = []
-	clusters_gt2_series = []
-	max_cluster_series = []
-	avg_cluster_series = []
-
-	for path in selected_paths:
-		time_steps, clusters_gt2, max_cluster_size, avg_cluster_size = _load_single_simulation(path)
-		time_series.append(time_steps)
-		clusters_gt2_series.append(clusters_gt2)
-		max_cluster_series.append(max_cluster_size)
-		avg_cluster_series.append(avg_cluster_size)
-
-	aligned_clusters_gt2 = _align_series(clusters_gt2_series)
-	aligned_max_cluster = _align_series(max_cluster_series)
-	aligned_avg_cluster = _align_series(avg_cluster_series)
-	min_length = min(series.shape[0] for series in time_series)
-	time_steps = time_series[0][:min_length]
-
-	fig, axes = plt.subplots(3, 1, figsize=(11, 11), sharex=True)
-
-	_plot_mean_with_dispersion(
-		axes[0],
-		time_steps,
-		aligned_clusters_gt2,
-		"Time vs Number of Clusters with Size > 2",
-		"Number of clusters",
-		"tab:blue",
-	)
-
-	_plot_mean_with_dispersion(
-		axes[1],
-		time_steps,
-		aligned_max_cluster,
-		"Time vs Max Cluster Size",
-		"Max cluster size",
-		"tab:green",
-	)
-
-	_plot_mean_with_dispersion(
-		axes[2],
-		time_steps,
-		aligned_avg_cluster,
-		"Time vs Average Cluster Size",
-		"Average cluster size",
-		"tab:orange",
-		ytick_step=2,
-	)
-
-	axes[2].set_xlabel("Time step")
-
-	fig.suptitle(f"Cluster summary over {len(selected_paths)} simulation(s)")
-	fig.tight_layout()
-
-	first_path = selected_paths[0]
-	graph_dir = Path(__file__).resolve().parent.parent / "graphs"
-	stem_parts = first_path.stem.split("_")
-	if len(stem_parts) > 2 and stem_parts[0].lower() == "sim":
-		name_tail = "_".join(stem_parts[2:])
+	if args.paths:
+		selected_paths: list[Path] = []
+		for raw_path in args.paths:
+			path = Path(raw_path)
+			if path.is_dir():
+				selected_paths.extend(path.rglob("*.npz"))
+			elif path.is_file() and path.suffix.lower() == ".npz":
+				selected_paths.append(path)
 	else:
-		name_tail = first_path.stem
-	output_path = graph_dir / f"sims_{len(selected_paths)}_{name_tail}_cluster_summary_multi.png"
-	graph_dir.mkdir(parents=True, exist_ok=True)
-	fig.savefig(output_path, dpi=200, bbox_inches="tight")
-	plt.show()
-	print(f"Saved figure to: {output_path}")
+		selected_paths = _discover_npz_files(args.data_root)
+
+	selected_paths = sorted({path.resolve() for path in selected_paths if path.exists() and path.suffix.lower() == ".npz"})
+	if not selected_paths:
+		raise FileNotFoundError("No .npz files were found. Provide explicit paths or point --data-root at the data directory.")
+
+	output_dir = args.output_dir
+	output_dir.mkdir(parents=True, exist_ok=True)
+
+	grouped_paths = _group_paths_by_arguments(selected_paths)
+	if not grouped_paths:
+		raise ValueError("No valid simulation groups were found.")
+
+	for group_key, group_paths in grouped_paths:
+		output_path = output_dir / _build_output_name(group_key, len(group_paths))
+		_render_cluster_summary(group_paths, output_path)
 
 
 if __name__ == "__main__":

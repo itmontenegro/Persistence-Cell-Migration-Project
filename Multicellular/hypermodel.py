@@ -1,3 +1,4 @@
+import cluster_cpu
 import numpy as np
 import cupy as cp
 import cupyx.scipy.sparse as cpx_sparse
@@ -10,12 +11,12 @@ start_time = time.time()
 
 boundary_values = ['none', 'periodic']       # Boundaries: 'periodic', 'hard', 'none'
 init_position_values = ['random', 'cluster']   # Initial positions: 'cluster', 'random', 'grid'
-f_cil_values = [0, 0.5]     # Repolarization rate for CIL
+f_cil_values = [0.5]     # Repolarization rate for CIL
 
 DTYPE = cp.float32
 
 # SET UP
-replicates = 1              # Number of replicates for each parameter set
+replicates = 10              # Number of replicates for each parameter set
 max_batch_size = 10         # Maximum number of replicates to run simultaneously in VRAM
 N_cells = 50                # Number of cells to simulate per replicate
 
@@ -37,28 +38,6 @@ dt = 0.1
 T = 100
 Nts = int(T/dt)
 Nts2 = cp.linspace(0, T, Nts)
-
-def batch_cluster_info(mask_bool, n_cells):
-    B = mask_bool.shape[0]
-    bb, ii, jj = cp.nonzero(mask_bool)
-    rows = bb * n_cells + ii
-    cols = bb * n_cells + jj
-    data = cp.ones(rows.shape[0], dtype=cp.float32)
-    big = cpx_sparse.coo_matrix((data, (rows, cols)), shape=(B * n_cells, B * n_cells)).tocsr()
-
-    _, labels = cpx_csgraph.connected_components(big, directed=False, connection='weak')
-
-    counts = cp.bincount(labels)
-    sizes = counts[labels].reshape(B, n_cells)
-
-    # Distinct labels per row
-    labels_2d = labels.reshape(B, n_cells)
-    sl = cp.sort(labels_2d, axis=1)
-    is_new = cp.ones_like(sl, dtype=cp.bool)
-    is_new[:, 1:] = sl[:, 1:] != sl[:, :-1]
-    n_clusters = is_new.sum(axis=1)
-
-    return sizes, n_clusters
 
 for boundary in boundary_values:
     start_time_model = time.time()
@@ -84,7 +63,7 @@ for boundary in boundary_values:
                         fcil_str = str.replace(str(f_cil), '.', '_')
                         Start_str = str.replace(str(init_position), '.', '_')
 
-                        main_path = f'DATA/Alpha_{Alpha_str}/H1_{H1_str}_H2_{H2_str}/Dr_{Dr_str}/Boundary_{Boundary_str}/f_cil_{f_cil}/Start_{Start_str}'
+                        main_path = f'DATA/Alpha_{Alpha_str}/H1_{H1_str}_H2_{H2_str}/Dr_{Dr_str}/Boundary_{Boundary_str}/fcil_{fcil_str}/Start_{Start_str}'
                         os.makedirs(main_path, exist_ok=True)
 
                         print(f"Initializing set: Dr={Dr_values[Drval]}, H1={H1}, H2={H2}, Alpha={alpha}, Boundary={boundary}")
@@ -109,12 +88,6 @@ for boundary in boundary_values:
                         # Array to save the angle between three positions.
                         angle_array = cp.zeros((max_batch_size, N_cells, Nts), dtype=DTYPE)
 
-                        # Array to save the cluster size for each cell.
-                        cluster_size_array = cp.zeros((max_batch_size, N_cells, Nts), dtype=DTYPE)
-
-                        # Array to save how many clusters there are in each step.
-                        n_clusters_array = cp.zeros((max_batch_size, Nts), dtype=DTYPE)
-
                         fmpi_x_array = cp.zeros((max_batch_size, N_cells, Nts), dtype=DTYPE)
                         fmpi_y_array = cp.zeros((max_batch_size, N_cells, Nts), dtype=DTYPE)
                         xi_x_array = cp.zeros((max_batch_size, N_cells, Nts), dtype=DTYPE)
@@ -134,7 +107,7 @@ for boundary in boundary_values:
                             print(f"Running chunk of {c} replicates in parallel...")
                             start_time_batch = time.time()
 
-                            for arr in (x_array, y_array, theta_array, angle_array, cluster_size_array, n_clusters_array,
+                            for arr in (x_array, y_array, theta_array, angle_array,
                                         fmpi_x_array, fmpi_y_array, xi_x_array, xi_y_array,
                                         dfW1, dfW2_x, dfW2_y):
                                 arr.fill(0)  # Clear arrays in-place to reuse memory on the GPU
@@ -199,11 +172,6 @@ for boundary in boundary_values:
                                 # Interaction masking: only consider interactions if R <= dist <= 2R (dist <= 2*R due to physical limitations)
                                 mask = (dist <= 2*R)
                                 mask_f32 = mask.astype(cp.float32)
-
-                                # Clustering
-                                sizes, n_clusters = batch_cluster_info(mask, N_cells)
-                                cluster_size_array[:c, :, t] = sizes
-                                n_clusters_array[:c, t] = n_clusters
 
                                 # Avoid division by zero for normal vector calculation
                                 dist_safe = cp.maximum(dist, 1e-10)  
@@ -282,15 +250,19 @@ for boundary in boundary_values:
                             angle_array[:c, :, 2:] = cp.arccos(cos_angle)
 
                             # Save the npz file with all the arrays mapped back to individual files per simulation index
+                            # And calculate cluster sizes and number of clusters for each replicate using the CPU function
                             for batch_idx, (sim_id, path_save) in enumerate(batch_chunk):
+                                x_np = cp.asnumpy(x_array[batch_idx])
+                                y_np = cp.asnumpy(y_array[batch_idx])
+                                cluster_size_array, n_clusters_array = cluster_cpu.cluster_arrays(x_np, y_np, R, boundary, L_box)
                                 np.savez(
                                     path_save,
-                                    x_array=cp.asnumpy(x_array[batch_idx]),
-                                    y_array=cp.asnumpy(y_array[batch_idx]),
+                                    x_array=x_np,
+                                    y_array=y_np,
                                     theta_array=cp.asnumpy(theta_array[batch_idx]),
                                     angle_array=cp.asnumpy(angle_array[batch_idx]),
-                                    cluster_size_array=cp.asnumpy(cluster_size_array[batch_idx]),
-                                    n_clusters_array=cp.asnumpy(n_clusters_array[batch_idx]),
+                                    cluster_size_array=cluster_size_array,
+                                    n_clusters_array=n_clusters_array,
                                     fmpi_x_array=cp.asnumpy(fmpi_x_array[batch_idx]),
                                     fmpi_y_array=cp.asnumpy(fmpi_y_array[batch_idx]),
                                     xi_x_array=cp.asnumpy(xi_x_array[batch_idx]),

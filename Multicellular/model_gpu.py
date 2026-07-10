@@ -1,10 +1,10 @@
 import numpy as np
 import cupy as cp
-import cupyx.scipy.sparse as cpx_sparse
-import cupyx.scipy.sparse.csgraph as cpx_csgraph
+import cluster_cpu
 import fbmfast_gpu as fbm
 import time
 import os
+
 
 start_time = time.time()
 
@@ -13,7 +13,7 @@ init_position_values = ['random', 'cluster']   # Initial positions: 'cluster', '
 
 # SET UP
 replicates = 1              # Number of replicates for each parameter set
-N_cells = 50                # Number of cells to simulate per replicate
+N_cells = 100                # Number of cells to simulate per replicate
 
 DTYPE = cp.float32
 
@@ -22,7 +22,7 @@ DTYPE = cp.float32
 R = 1.0                     # Cell radius
 W_s = 1.0                   # Energy of adhesion cell-substrate
 W_c = 1.0                   # Energy of adhesion cell-cell
-fcil_values = [0, 0.5]                   # Repolarization rate for CIL
+fcil_values = [0.5]                   # Repolarization rate for CIL
 
 L_box = 20                  # Size of side of the square boundary
 
@@ -73,8 +73,8 @@ for boundary in boundary_values:
                         y_array = cp.zeros((N_cells, Nts), dtype=DTYPE)
                         theta_array = cp.zeros((N_cells, Nts), dtype=DTYPE)
                         angle_array = cp.zeros((N_cells, Nts), dtype=DTYPE)
-                        cluster_size_array = cp.zeros((N_cells, Nts), dtype=DTYPE)
-                        n_clusters_array = cp.zeros(Nts, dtype=DTYPE)
+                        #cluster_size_array = cp.zeros((N_cells, Nts), dtype=DTYPE)
+                        #n_clusters_array = cp.zeros(Nts, dtype=DTYPE)
                         fmpi_x_array = cp.zeros((N_cells, Nts), dtype=DTYPE)
                         fmpi_y_array = cp.zeros((N_cells, Nts), dtype=DTYPE)
                         xi_x_array = cp.zeros((N_cells, Nts), dtype=DTYPE)
@@ -94,8 +94,8 @@ for boundary in boundary_values:
                             start_time_batch = time.time()
 
                             # We reuse the arrays to avoid reallocation in each simulation
-                            for arr in (x_array, y_array, theta_array, angle_array, cluster_size_array,
-                                        n_clusters_array, fmpi_x_array, fmpi_y_array,
+                            for arr in (x_array, y_array, theta_array, angle_array,
+                                        fmpi_x_array, fmpi_y_array,
                                         xi_x_array, xi_y_array, dfW1, dfW2_x, dfW2_y):
                                 arr.fill(0)
 
@@ -181,20 +181,6 @@ for boundary in boundary_values:
                                 # Interaction masking: only consider interactions if R <= dist <= 2R (dist <= 2*R due to physical limitations)
                                 mask = (dist <= 2*R)
 
-                                # Convert the mask to a sparse matrix
-                                sparse_adj = cpx_sparse.csr_matrix(mask.astype(cp.float32))
-
-                                # Get the number of clusters and labels mapping each cell to a cluster ID
-                                n_clusters, labels = cpx_csgraph.connected_components(
-                                    sparse_adj, directed=False, connection='weak'
-                                )
-
-                                # Count how many cells are in each cluster ID
-                                counts = cp.bincount(labels)
-                                # Map the size of the cluster back to each cell
-                                cluster_size_array[:, t] = counts[labels]
-                                n_clusters_array[t] = n_clusters
-
                                 dist_safe = cp.maximum(dist, 1e-10)  # Avoid division by zero for normal vector calculation
 
                                 # Velocity differences
@@ -276,15 +262,23 @@ for boundary in boundary_values:
                             cos_angle = cp.clip(dot_product / (n1 * n2), -1.0, 1.0)
                             angle_array[:, 2:] = cp.arccos(cos_angle)
 
+                            cluster_time_start = time.time()
+
+                            x_np = cp.asnumpy(x_array)
+                            y_np = cp.asnumpy(y_array)
+                            cluster_size_array, n_clusters_array = cluster_cpu.cluster_arrays(x_np, y_np, R, boundary, L_box)
+
+                            cluster_time_end = time.time()
+                            print(f"Cluster analysis for simulation {sim} completed in {cluster_time_end - cluster_time_start:.2f} seconds.")
                             # Save the npz file with all the arrays
                             np.savez(
                                 path_save,
-                                x_array=cp.asnumpy(x_array),
-                                y_array=cp.asnumpy(y_array),
+                                x_array=x_np,
+                                y_array=y_np,
                                 theta_array=cp.asnumpy(theta_array),
                                 angle_array=cp.asnumpy(angle_array),
-                                cluster_size_array=cp.asnumpy(cluster_size_array),
-                                n_clusters_array=cp.asnumpy(n_clusters_array),
+                                cluster_size_array=cluster_size_array,
+                                n_clusters_array=n_clusters_array,
                                 fmpi_x_array=cp.asnumpy(fmpi_x_array),
                                 fmpi_y_array=cp.asnumpy(fmpi_y_array),
                                 xi_x_array=cp.asnumpy(xi_x_array),

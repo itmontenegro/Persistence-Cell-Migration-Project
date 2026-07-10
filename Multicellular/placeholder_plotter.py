@@ -90,7 +90,7 @@ def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str, str,
 
     path_text = str(npz_file)
     dir_match = re.search(
-        r"Alpha_([0-9_]+)/H1_([0-9_]+)_H2_([0-9_]+)/Dr_([0-9_]+)/Boundary_([A-Za-z]+)/fcil_([0-9_]+)/Start_([0-9_]+)",
+        r"Alpha_([0-9_]+)/H1_([0-9_]+)_H2_([0-9_]+)/Dr_([0-9_]+)/Boundary_([A-Za-z]+)/fcil_([0-9_]+)/Start_([A-Za-z0-9_]+)",
         path_text.replace("\\", "/"),
     )
     if dir_match:
@@ -100,10 +100,10 @@ def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str, str,
         dr = dir_match.group(4).replace("_", ".")
         boundary = dir_match.group(5).lower()
         fcil = dir_match.group(6).replace("_", ".")
-        start = dir_match.group(7).replace("_", ".")
+        start = dir_match.group(7)
 
     file_match = re.match(
-        r"Sim_([0-9]+)_Dr_([0-9_]+)_H1_([0-9_]+)_H2_([0-9_]+)_Alpha_([0-9_]+)(?:_Boundary_([A-Za-z]+))?(?:_fcil_([0-9_]+))?(?:_Start([0-9_]+))?\.npz$",
+        r"Sim_([0-9]+)_Dr_([0-9_]+)_H1_([0-9_]+)_H2_([0-9_]+)_Alpha_([0-9_]+)(?:_Boundary_([A-Za-z]+))?(?:_fcil_([0-9_]+))?(?:_Start_?([A-Za-z0-9_]+))?\.npz$",
         npz_file.name,
     )
     if file_match:
@@ -117,7 +117,7 @@ def _parse_from_path(npz_file: Path) -> tuple[int, str, str, str, str, str, str,
         if file_match.group(7):
             fcil = file_match.group(7).replace("_", ".")
         if file_match.group(8):
-            start = file_match.group(8).replace("_", ".")
+            start = file_match.group(8)
 
     return sim_id, alpha, h1, h2, dr, boundary, fcil, start
 
