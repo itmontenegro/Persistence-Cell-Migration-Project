@@ -1,0 +1,4 @@
+=== STRUCTURAL MATRIX SYSTEM SCORING LEDGER ===
+
+Split: 80_15_5    | Mode: joint                  | Var: Dr  -> R2: 0.9917 | RMSE: 0.2732 | MAE: 0.1869
+Split: 80_15_5    | Mode: joint                  | Var: H2  -> R2: 0.9905 | RMSE: 0.0153 | MAE: 0.0129
