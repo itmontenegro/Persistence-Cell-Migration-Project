@@ -1,0 +1,10 @@
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+scikit-learn
+fbm           # Fractional Brownian Motion calculations
+scikit-image  # Image processing for cell tracking/segmentation
+statsmodels   # Temporal autocorrelation & statistical analysis
+torch
